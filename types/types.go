@@ -55,11 +55,6 @@ func (v VerifyResult) AllPassed() bool {
 	return v.CompileOK && v.AllIssuesFixed && v.RegressionFree
 }
 
-// CanRetry 返回是否还可以继续重试修复。
-func (v VerifyResult) CanRetry() bool {
-	return !v.NeedsHuman && v.RetryCount < v.MaxRetries
-}
-
 // RepoFixResult 是单个仓库的最终结果。
 type RepoFixResult struct {
 	Repo         string

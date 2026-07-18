@@ -72,41 +72,6 @@ func (a *LoopAgent) Run(ctx context.Context, task string) (string, error) {
 	return resp.Content, nil
 }
 
-// RunWithMessages 使用自定义消息列表执行 Agent
-func (a *LoopAgent) RunWithMessages(ctx context.Context, messages []*schema.Message) (string, error) {
-	resp, err := a.reactAgent.Generate(ctx, messages)
-	if err != nil {
-		return "", fmt.Errorf("Agent 执行失败: %w", err)
-	}
-
-	return resp.Content, nil
-}
-
-// RunStreaming 流式执行 Agent（支持实时输出）
-func (a *LoopAgent) RunStreaming(ctx context.Context, task string) (*schema.Message, error) {
-	messages := []*schema.Message{
-		schema.SystemMessage(prompts.SystemPrompt),
-		schema.UserMessage(task),
-	}
-
-	stream, err := a.reactAgent.Stream(ctx, messages)
-	if err != nil {
-		return nil, fmt.Errorf("Agent 流式执行失败: %w", err)
-	}
-
-	// 收集流式输出
-	var fullContent string
-	for {
-		chunk, err := stream.Recv()
-		if err != nil {
-			break
-		}
-		fullContent += chunk.Content
-	}
-
-	return &schema.Message{Content: fullContent}, nil
-}
-
 // BuildTask 构建标准的修复任务描述
 func BuildTask(cfg *config.Config) string {
 	return fmt.Sprintf(

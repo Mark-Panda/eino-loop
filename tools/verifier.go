@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Mark-Panda/eino-loop/types"
-	"github.com/Mark-Panda/eino-loop/config"
 )
 
 // VerifyCompile 在工作树上运行 go build 并返回编译错误。
@@ -99,7 +98,7 @@ func VerifyRescan(ctx context.Context, worktreePath string, original []types.Fil
 
 // VerifyRegression 在工作树上运行 go vet 以及可选的 go test。
 func VerifyRegression(ctx context.Context, worktreePath string, runTests bool) (vetPass bool, testPass bool, errors []string, err error) {
-	// 第 3 级 a：go vet
+	// go vet 验证
 	vetCmd := exec.CommandContext(ctx, "go", "vet", "./...")
 	vetCmd.Dir = worktreePath
 	vetOutput, vetErr := vetCmd.CombinedOutput()
@@ -108,7 +107,7 @@ func VerifyRegression(ctx context.Context, worktreePath string, runTests bool) (
 		errors = append(errors, fmt.Sprintf("go vet failed: %s", string(vetOutput)))
 	}
 
-	// 第 3 级 b：go test（可选）
+	// go test（可选）
 	testPass = true // 如果不运行测试则默认通过
 	if runTests {
 		testCmd := exec.CommandContext(ctx, "go", "test", "-count=1", "-timeout", "5m", "./...")
@@ -121,128 +120,4 @@ func VerifyRegression(ctx context.Context, worktreePath string, runTests bool) (
 	}
 
 	return vetPass, testPass, errors, nil
-}
-
-// RollbackFix 使用 git checkout 回滚对特定文件的更改。
-func RollbackFix(ctx context.Context, worktreePath, file string) error {
-	cmd := exec.CommandContext(ctx, "git", "checkout", "--", file)
-	cmd.Dir = worktreePath
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git checkout %s: %w: %s", file, err, string(output))
-	}
-	return nil
-}
-
-// RollbackAll 回滚工作树中的所有更改。
-func RollbackAll(ctx context.Context, worktreePath string) error {
-	cmd := exec.CommandContext(ctx, "git", "checkout", "--", ".")
-	cmd.Dir = worktreePath
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git checkout all: %w: %s", err, string(output))
-	}
-	return nil
-}
-
-// VerifyAndRetry 实现单个仓库的完整验证-重试循环。
-// 返回所有重试尝试后的最终验证结果。
-func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string, fixResult types.FixResult, fixFn func(ctx context.Context) (int, error)) types.VerifyResult {
-	maxRetries := cfg.MaxRetries
-
-	// 将 config.LogFunc 转换为 tools.LogFunc
-	logFuncs := make([]LogFunc, len(cfg.LogFunctions))
-	for i, lf := range cfg.LogFunctions {
-		logFuncs[i] = LogFunc{
-			Library:   lf.Library,
-			Functions: lf.Functions,
-			CtxForm:   lf.CtxForm,
-		}
-	}
-
-	for round := 0; round <= maxRetries; round++ {
-		// 第 1 级：编译验证
-		compileOK, compileErrors, err := VerifyCompile(ctx, worktreePath)
-		if err != nil {
-			return types.VerifyResult{
-				CompileOK:  false,
-				RetryCount: round,
-				MaxRetries: maxRetries,
-				NeedsHuman: true,
-			}
-		}
-
-		if !compileOK {
-			// 回滚并重试修复
-			RollbackAll(ctx, worktreePath)
-			if round < maxRetries {
-				fixFn(ctx)
-				continue
-			}
-			return types.VerifyResult{
-				CompileOK:     false,
-				CompileErrors: compileErrors,
-				RetryCount:    round,
-				MaxRetries:    maxRetries,
-				NeedsHuman:    true,
-			}
-		}
-
-		// 第 2 级：重新扫描验证
-		allFixed, remaining, err := VerifyRescan(ctx, worktreePath, fixResult.OriginalIssues, logFuncs)
-		if err != nil {
-			return types.VerifyResult{
-				CompileOK:      true,
-				AllIssuesFixed: false,
-				RetryCount:     round,
-				MaxRetries:     maxRetries,
-				NeedsHuman:     true,
-			}
-		}
-
-		if !allFixed {
-			if round < maxRetries {
-				// 修复剩余问题
-				fixFn(ctx)
-				continue
-			}
-			return types.VerifyResult{
-				CompileOK:      true,
-				AllIssuesFixed: false,
-				Remaining:      remaining,
-				RetryCount:     round,
-				MaxRetries:     maxRetries,
-				NeedsHuman:     true,
-			}
-		}
-
-		// 第 3 级：回归验证
-		vetPass, _, regressErrors, _ := VerifyRegression(ctx, worktreePath, false)
-		if !vetPass {
-			return types.VerifyResult{
-				CompileOK:      true,
-				AllIssuesFixed: true,
-				RegressionFree: false,
-				RetryCount:     round,
-				MaxRetries:     maxRetries,
-				NeedsHuman:     true,
-			}
-		}
-
-		// 所有检查通过！
-		_ = regressErrors
-		return types.VerifyResult{
-			CompileOK:      true,
-			AllIssuesFixed: true,
-			RegressionFree: true,
-			RetryCount:     round,
-			MaxRetries:     maxRetries,
-		}
-	}
-
-	return types.VerifyResult{
-		RetryCount: maxRetries,
-		MaxRetries: maxRetries,
-		NeedsHuman: true,
-	}
 }

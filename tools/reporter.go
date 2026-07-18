@@ -137,9 +137,3 @@ func formatVerifyStatus(v types.VerifyResult) string {
 	}
 	return strings.Join(parts, " ")
 }
-
-// GenerateFeishuDocContent 生成适合飞书文档的 markdown 内容。
-func GenerateFeishuDocContent(results []types.RepoFixResult) string {
-	report, _ := GenerateReport(context.Background(), results)
-	return report
-}

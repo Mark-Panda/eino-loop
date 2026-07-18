@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 
 	"github.com/cloudwego/eino/components/tool"
 
@@ -344,16 +343,15 @@ func newFeishuTool(cfg *config.Config) tool.InvokableTool {
 
 // mustNewTool 创建工具，失败时 panic
 func mustNewTool(name, desc string, fn interface{}) tool.InvokableTool {
-	t, err := NewInvokableTool(name, desc, fn)
+	t, err := newInvokableTool(name, desc, fn)
 	if err != nil {
 		panic(fmt.Sprintf("创建工具 %s 失败: %v", name, err))
 	}
 	return t
 }
 
-// NewInvokableTool 使用 eino 的 InferTool 创建工具
-// 这是一个泛型封装，根据输入输出类型自动推导 JSON Schema
-func NewInvokableTool(name, desc string, fn interface{}) (tool.InvokableTool, error) {
+// newInvokableTool 使用 eino 的 InferTool 创建工具
+func newInvokableTool(name, desc string, fn interface{}) (tool.InvokableTool, error) {
 	// 使用类型断言匹配不同的函数签名
 	switch f := fn.(type) {
 	case func(context.Context, ScanInput) (string, error):
@@ -405,55 +403,4 @@ func convertToLogFunc(cfgFuncs []config.LogFunc) []LogFunc {
 func toJSON(v interface{}) string {
 	data, _ := json.Marshal(v)
 	return string(data)
-}
-
-// RunAgent 是 Agent 的入口函数，接受任务描述并执行
-func RunAgent(ctx context.Context, cfg *config.Config, task string) (string, error) {
-	// 创建所有工具
-	allTools := RegisterAll(cfg)
-
-	// 构建工具信息列表
-	toolInfos := make([]string, 0, len(allTools))
-	for _, t := range allTools {
-		info, err := t.Info(ctx)
-		if err != nil {
-			continue
-		}
-		toolInfos = append(toolInfos, fmt.Sprintf("- %s: %s", info.Name, info.Desc))
-	}
-
-	// 返回工具列表和任务描述，供 Agent 使用
-	return toJSON(map[string]interface{}{
-		"tools": toolInfos,
-		"task":  task,
-	}), nil
-}
-
-// GetToolNames 返回所有注册的工具名称
-func GetToolNames(cfg *config.Config) []string {
-	allTools := RegisterAll(cfg)
-	names := make([]string, 0, len(allTools))
-	for _, t := range allTools {
-		info, err := t.Info(context.Background())
-		if err != nil {
-			continue
-		}
-		names = append(names, info.Name)
-	}
-	return names
-}
-
-// convertToLogFuncAdapter 适配 findLogsWithoutContext 的参数
-func convertToLogFuncAdapter(cfg *config.Config) []LogFunc {
-	return convertToLogFunc(cfg.LogFunctions)
-}
-
-// RepoRoot 获取仓库根目录（从配置）
-func RepoRoot(cfg *config.Config) string {
-	return cfg.RepoRoot
-}
-
-// WorktreePathForRepo 获取仓库的工作树路径
-func WorktreePathForRepo(cfg *config.Config, repoPath string) string {
-	return filepath.Join(cfg.RepoRoot, filepath.Base(repoPath))
 }

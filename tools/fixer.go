@@ -8,57 +8,14 @@ import (
 	"go/printer"
 	"go/token"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/Mark-Panda/eino-loop/types"
-	"github.com/Mark-Panda/eino-loop/config"
 )
-
-// CreateFixBranch 在 git 工作树中创建一个新分支用于应用修复。
-func CreateFixBranch(ctx context.Context, repoPath string, cfg *config.Config) (branchName, worktreePath string, err error) {
-	repo, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return "", "", fmt.Errorf("open repo: %w", err)
-	}
-
-	branchName = cfg.FixBranchName()
-	worktreePath = filepath.Join(os.TempDir(), "eino-loop-fix-"+filepath.Base(repoPath)+"-"+time.Now().Format("20060102150405"))
-
-	// 获取 HEAD 引用
-	headRef, err := repo.Head()
-	if err != nil {
-		return "", "", fmt.Errorf("get HEAD: %w", err)
-	}
-
-	// 获取工作树
-	wt, err := repo.Worktree()
-	if err != nil {
-		return "", "", fmt.Errorf("get worktree: %w", err)
-	}
-
-	// 创建并切换到新分支
-	branchRef := plumbing.NewBranchReferenceName(branchName)
-	err = wt.Checkout(&git.CheckoutOptions{
-		Hash:   headRef.Hash(),
-		Branch: branchRef,
-		Create: true,
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("create branch %s: %w", branchName, err)
-	}
-
-	// 使用仓库自身的工作树路径作为 worktreePath
-	worktreePath = wt.Filesystem.Root()
-
-	return branchName, worktreePath, nil
-}
 
 // ApplyLogFix 对单个日志调用位置应用 AST 重写修复。
 // 如果修复成功应用则返回 true，以及 diff 内容。
@@ -73,13 +30,13 @@ func ApplyLogFix(ctx context.Context, worktreePath string, analysis types.Analyz
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 	if err != nil {
-		return false, "", fmt.Errorf("parse file: %w", err)
+		return false, "", fmt.Errorf("解析文件失败: %w", err)
 	}
 
 	// 读取原始内容用于 diff
 	originalContent, err := os.ReadFile(filePath)
 	if err != nil {
-		return false, "", fmt.Errorf("read original file: %w", err)
+		return false, "", fmt.Errorf("读取原始文件失败: %w", err)
 	}
 
 	// 根据修复类型应用修复
@@ -112,12 +69,12 @@ func ApplyLogFix(ctx context.Context, worktreePath string, analysis types.Analyz
 	// 将修改后的 AST 写回文件
 	outFile, err := os.Create(filePath)
 	if err != nil {
-		return false, "", fmt.Errorf("create output file: %w", err)
+		return false, "", fmt.Errorf("创建输出文件失败: %w", err)
 	}
 	defer outFile.Close()
 
 	if err := printer.Fprint(outFile, fset, file); err != nil {
-		return false, "", fmt.Errorf("print AST: %w", err)
+		return false, "", fmt.Errorf("写入 AST 失败: %w", err)
 	}
 
 	// 生成简单的 diff 表示
@@ -169,8 +126,6 @@ func fixReceiverCall(call *ast.CallExpr, logLib, ctxVar string) bool {
 	}
 
 	// 替换：receiver.Func(args...) → receiver.WithContext(ctx).Func(args...)
-	// sel.X 原本是接收者（如 "log" 或 "entry"）
-	// 现在 sel.X 变为 WithContext 调用
 	sel.X = withContextCall
 
 	return true
@@ -180,18 +135,18 @@ func fixReceiverCall(call *ast.CallExpr, logLib, ctxVar string) bool {
 func CommitAndPush(ctx context.Context, worktreePath, message string) (string, error) {
 	repo, err := git.PlainOpen(worktreePath)
 	if err != nil {
-		return "", fmt.Errorf("open repo at %s: %w", worktreePath, err)
+		return "", fmt.Errorf("打开仓库失败 %s: %w", worktreePath, err)
 	}
 
 	wt, err := repo.Worktree()
 	if err != nil {
-		return "", fmt.Errorf("get worktree: %w", err)
+		return "", fmt.Errorf("获取工作树失败: %w", err)
 	}
 
 	// 暂存所有更改
 	_, err = wt.Add(".")
 	if err != nil {
-		return "", fmt.Errorf("stage changes: %w", err)
+		return "", fmt.Errorf("暂存更改失败: %w", err)
 	}
 
 	// 提交
@@ -203,7 +158,7 @@ func CommitAndPush(ctx context.Context, worktreePath, message string) (string, e
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("commit: %w", err)
+		return "", fmt.Errorf("提交失败: %w", err)
 	}
 
 	// 推送
@@ -212,7 +167,7 @@ func CommitAndPush(ctx context.Context, worktreePath, message string) (string, e
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		// 推送失败不是致命错误 — 分支仍然在本地提交成功
-		return hash.String(), fmt.Errorf("push (commit %s succeeded locally): %w", hash.String()[:7], err)
+		return hash.String(), fmt.Errorf("推送失败（commit %s 已在本地成功）: %w", hash.String()[:7], err)
 	}
 
 	return hash.String(), nil
@@ -257,15 +212,4 @@ func generateDiff(filename, oldContent, newContent string) string {
 	}
 
 	return diff.String()
-}
-
-// RunGoModTidy 运行 go mod tidy 以修复 AST 重写后的模块问题。
-func RunGoModTidy(ctx context.Context, worktreePath string) error {
-	cmd := exec.CommandContext(ctx, "go", "mod", "tidy")
-	cmd.Dir = worktreePath
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("go mod tidy: %w: %s", err, string(output))
-	}
-	return nil
 }
