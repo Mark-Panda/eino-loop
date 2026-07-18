@@ -23,6 +23,12 @@ type Config struct {
 	// 需要检测的日志函数
 	LogFunctions []LogFunc
 
+	// LLM 设置
+	LLMBaseURL string // OpenAI 兼容端点
+	LLMAPIKey  string // API 密钥
+	LLMModel   string // 模型名称（如 gpt-4o, deepseek-chat）
+	LLMMaxStep int    // Agent 最大推理步数（默认：20）
+
 	// 飞书设置
 	FeishuEnabled  bool
 	FeishuChatID   string // 飞书群聊 ID
@@ -69,6 +75,12 @@ func Load() *Config {
 		MaxRetries:   intOrDefault("EINO_LOOP_MAX_RETRIES", 3),
 		DryRun:       boolOrDefault("EINO_LOOP_DRY_RUN", false),
 		LogFunctions: DefaultLogFunctions(),
+
+		// LLM 配置
+		LLMBaseURL: envOrDefault("EINO_LOOP_LLM_BASE_URL", "https://api.openai.com/v1"),
+		LLMAPIKey:  os.Getenv("EINO_LOOP_LLM_API_KEY"),
+		LLMModel:   envOrDefault("EINO_LOOP_LLM_MODEL", "gpt-4o"),
+		LLMMaxStep: intOrDefault("EINO_LOOP_LLM_MAX_STEP", 20),
 
 		FeishuEnabled:  boolOrDefault("EINO_LOOP_FEISHU_ENABLED", false),
 		FeishuChatID:   os.Getenv("EINO_LOOP_FEISHU_CHAT_ID"),

@@ -25,36 +25,33 @@ func main() {
 		log.Println("[DRY-RUN] 仅扫描模式，不会执行修复")
 	}
 
-	loop, err := agent.BuildLoopGraph(cfg)
-	if err != nil {
-		log.Fatalf("构建循环图失败: %v", err)
+	// 检查 LLM 配置
+	if cfg.LLMAPIKey == "" {
+		log.Fatal("[错误] 未配置 LLM API 密钥，请设置 EINO_LOOP_LLM_API_KEY 环境变量")
 	}
-
-	// 启动时立即执行一次
-	runLoop(loop, cfg)
-
-	// 按配置的间隔定时执行
-	ticker := time.NewTicker(cfg.ScanInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		runLoop(loop, cfg)
-	}
-}
-
-func runLoop(loop agent.LoopRunner, cfg *config.Config) {
-	log.Println("=== 开始执行循环 ===")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	report, err := loop.Invoke(ctx, agent.LoopInput{RepoRoot: cfg.RepoRoot})
+	// 创建 ReAct Agent
+	loopAgent, err := agent.NewLoopAgent(ctx, cfg)
 	if err != nil {
-		log.Printf("循环执行失败: %v", err)
-		return
+		log.Fatalf("创建 Agent 失败: %v", err)
 	}
 
-	// 输出报告到终端
-	fmt.Fprintln(os.Stdout, report)
-	log.Println("=== 循环执行完成 ===")
+	// 构建任务描述
+	task := agent.BuildTask(cfg)
+	log.Printf("[Agent] 开始执行任务")
+	log.Printf("[Agent] 目标仓库目录: %s", cfg.RepoRoot)
+	log.Printf("[Agent] LLM 模型: %s", cfg.LLMModel)
+
+	// 运行 Agent（Agent 会自主决策调用工具）
+	report, err := loopAgent.Run(ctx, task)
+	if err != nil {
+		log.Fatalf("Agent 执行失败: %v", err)
+	}
+
+	// 输出最终报告
+	fmt.Fprintln(os.Stdout, "\n"+report)
+	log.Println("[Agent] 任务执行完成")
 }
