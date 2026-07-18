@@ -21,7 +21,7 @@ import (
 	"github.com/Mark-Panda/eino-loop/config"
 )
 
-// CreateFixBranch creates a new branch in a git worktree for applying fixes.
+// CreateFixBranch 在 git 工作树中创建一个新分支用于应用修复。
 func CreateFixBranch(ctx context.Context, repoPath string, cfg *config.Config) (branchName, worktreePath string, err error) {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
@@ -31,19 +31,19 @@ func CreateFixBranch(ctx context.Context, repoPath string, cfg *config.Config) (
 	branchName = cfg.FixBranchName()
 	worktreePath = filepath.Join(os.TempDir(), "eino-loop-fix-"+filepath.Base(repoPath)+"-"+time.Now().Format("20060102150405"))
 
-	// Get HEAD reference
+	// 获取 HEAD 引用
 	headRef, err := repo.Head()
 	if err != nil {
 		return "", "", fmt.Errorf("get HEAD: %w", err)
 	}
 
-	// Create worktree
+	// 获取工作树
 	wt, err := repo.Worktree()
 	if err != nil {
 		return "", "", fmt.Errorf("get worktree: %w", err)
 	}
 
-	// Create and checkout new branch
+	// 创建并切换到新分支
 	branchRef := plumbing.NewBranchReferenceName(branchName)
 	err = wt.Checkout(&git.CheckoutOptions{
 		Hash:   headRef.Hash(),
@@ -54,14 +54,14 @@ func CreateFixBranch(ctx context.Context, repoPath string, cfg *config.Config) (
 		return "", "", fmt.Errorf("create branch %s: %w", branchName, err)
 	}
 
-	// Use the repo's own worktree path as the worktreePath
+	// 使用仓库自身的工作树路径作为 worktreePath
 	worktreePath = wt.Filesystem.Root()
 
 	return branchName, worktreePath, nil
 }
 
-// ApplyLogFix applies the AST rewrite fix for a single log call site.
-// Returns true if the fix was applied successfully, and the diff content.
+// ApplyLogFix 对单个日志调用位置应用 AST 重写修复。
+// 如果修复成功应用则返回 true，以及 diff 内容。
 func ApplyLogFix(ctx context.Context, worktreePath string, analysis types.AnalyzeResult) (bool, string, error) {
 	if analysis.FixType == "skip" || analysis.NearestCtx == "" {
 		return false, "", nil
@@ -76,13 +76,13 @@ func ApplyLogFix(ctx context.Context, worktreePath string, analysis types.Analyz
 		return false, "", fmt.Errorf("parse file: %w", err)
 	}
 
-	// Read original content for diff
+	// 读取原始内容用于 diff
 	originalContent, err := os.ReadFile(filePath)
 	if err != nil {
 		return false, "", fmt.Errorf("read original file: %w", err)
 	}
 
-	// Apply the fix based on fix type
+	// 根据修复类型应用修复
 	modified := false
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -109,7 +109,7 @@ func ApplyLogFix(ctx context.Context, worktreePath string, analysis types.Analyz
 		return false, "", nil
 	}
 
-	// Write modified AST back to file
+	// 将修改后的 AST 写回文件
 	outFile, err := os.Create(filePath)
 	if err != nil {
 		return false, "", fmt.Errorf("create output file: %w", err)
@@ -120,14 +120,14 @@ func ApplyLogFix(ctx context.Context, worktreePath string, analysis types.Analyz
 		return false, "", fmt.Errorf("print AST: %w", err)
 	}
 
-	// Generate a simple diff representation
+	// 生成简单的 diff 表示
 	newContent, _ := os.ReadFile(filePath)
 	diff := generateDiff(filePath, string(originalContent), string(newContent))
 
 	return true, diff, nil
 }
 
-// fixSlogCall transforms slog.Func("msg") → slog.FuncContext(ctx, "msg").
+// fixSlogCall 将 slog.Func("msg") 转换为 slog.FuncContext(ctx, "msg")。
 func fixSlogCall(call *ast.CallExpr, ctxVar string) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -136,21 +136,21 @@ func fixSlogCall(call *ast.CallExpr, ctxVar string) bool {
 
 	funcName := sel.Sel.Name
 	if strings.HasSuffix(funcName, "Context") {
-		return false // Already has Context
+		return false // 已经有 Context
 	}
 
-	// Add Context suffix: Info → InfoContext, Error → ErrorContext, etc.
+	// 添加 Context 后缀：Info → InfoContext，Error → ErrorContext 等
 	sel.Sel.Name = funcName + "Context"
 
-	// Prepend ctx as first argument
+	// 将 ctx 作为第一个参数前置
 	ctxArg := &ast.Ident{Name: ctxVar}
 	call.Args = append([]ast.Expr{ctxArg}, call.Args...)
 
 	return true
 }
 
-// fixReceiverCall transforms log.Func("msg") → log.WithContext(ctx).Func("msg").
-// Used for fiber-log and logrus.
+// fixReceiverCall 将 log.Func("msg") 转换为 log.WithContext(ctx).Func("msg")。
+// 用于 fiber-log 和 logrus。
 func fixReceiverCall(call *ast.CallExpr, logLib, ctxVar string) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -159,7 +159,7 @@ func fixReceiverCall(call *ast.CallExpr, logLib, ctxVar string) bool {
 
 	ctxArg := &ast.Ident{Name: ctxVar}
 
-	// Build: receiver.WithContext(ctx)
+	// 构建：receiver.WithContext(ctx)
 	withContextCall := &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
 			X:   sel.X,
@@ -168,15 +168,15 @@ func fixReceiverCall(call *ast.CallExpr, logLib, ctxVar string) bool {
 		Args: []ast.Expr{ctxArg},
 	}
 
-	// Replace: receiver.Func(args...) → receiver.WithContext(ctx).Func(args...)
-	// sel.X was the receiver (e.g., "log" or "entry")
-	// Now sel.X becomes the WithContext call
+	// 替换：receiver.Func(args...) → receiver.WithContext(ctx).Func(args...)
+	// sel.X 原本是接收者（如 "log" 或 "entry"）
+	// 现在 sel.X 变为 WithContext 调用
 	sel.X = withContextCall
 
 	return true
 }
 
-// CommitAndPush commits all changes in the worktree and pushes the branch.
+// CommitAndPush 提交工作树中的所有更改并推送分支。
 func CommitAndPush(ctx context.Context, worktreePath, message string) (string, error) {
 	repo, err := git.PlainOpen(worktreePath)
 	if err != nil {
@@ -188,13 +188,13 @@ func CommitAndPush(ctx context.Context, worktreePath, message string) (string, e
 		return "", fmt.Errorf("get worktree: %w", err)
 	}
 
-	// Stage all changes
+	// 暂存所有更改
 	_, err = wt.Add(".")
 	if err != nil {
 		return "", fmt.Errorf("stage changes: %w", err)
 	}
 
-	// Commit
+	// 提交
 	hash, err := wt.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{
 			Name:  "eino-loop",
@@ -206,19 +206,19 @@ func CommitAndPush(ctx context.Context, worktreePath, message string) (string, e
 		return "", fmt.Errorf("commit: %w", err)
 	}
 
-	// Push
+	// 推送
 	err = repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: "origin",
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
-		// Push failure is not fatal — branch is still committed locally
+		// 推送失败不是致命错误 — 分支仍然在本地提交成功
 		return hash.String(), fmt.Errorf("push (commit %s succeeded locally): %w", hash.String()[:7], err)
 	}
 
 	return hash.String(), nil
 }
 
-// generateDiff creates a simple unified diff between old and new content.
+// generateDiff 在旧内容和新内容之间创建简单的统一 diff。
 func generateDiff(filename, oldContent, newContent string) string {
 	if oldContent == newContent {
 		return ""
@@ -231,7 +231,7 @@ func generateDiff(filename, oldContent, newContent string) string {
 	diff.WriteString(fmt.Sprintf("--- a/%s\n", filename))
 	diff.WriteString(fmt.Sprintf("+++ b/%s\n", filename))
 
-	// Simple line-by-line comparison
+	// 简单的逐行比较
 	maxLines := len(oldLines)
 	if len(newLines) > maxLines {
 		maxLines = len(newLines)
@@ -259,7 +259,7 @@ func generateDiff(filename, oldContent, newContent string) string {
 	return diff.String()
 }
 
-// RollbackGoMod runs go mod tidy to fix any module issues after AST rewrite.
+// RunGoModTidy 运行 go mod tidy 以修复 AST 重写后的模块问题。
 func RunGoModTidy(ctx context.Context, worktreePath string) error {
 	cmd := exec.CommandContext(ctx, "go", "mod", "tidy")
 	cmd.Dir = worktreePath

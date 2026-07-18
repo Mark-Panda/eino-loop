@@ -23,10 +23,10 @@ func main() {
 		log.Fatalf("Failed to build loop graph: %v", err)
 	}
 
-	// Run once immediately
+	// 立即运行一次
 	runLoop(loop, cfg)
 
-	// Then run on interval
+	// 然后按间隔运行
 	ticker := time.NewTicker(cfg.ScanInterval)
 	defer ticker.Stop()
 
@@ -47,7 +47,7 @@ func runLoop(loop agent.LoopRunner, cfg *config.Config) {
 		return
 	}
 
-	// Output report to stdout
+	// 将报告输出到标准输出
 	fmt.Fprintln(os.Stdout, report)
 	log.Println("=== Loop execution completed ===")
 }

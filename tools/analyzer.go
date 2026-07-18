@@ -10,8 +10,8 @@ import (
 	"github.com/Mark-Panda/eino-loop/types"
 )
 
-// AnalyzeLogCallsite analyzes a log call site to determine the fix strategy.
-// Checks if the enclosing function has a ctx parameter and finds the nearest ctx variable.
+// AnalyzeLogCallsite 分析日志调用位置，确定修复策略。
+// 检查包含该调用的函数是否具有 ctx 参数，并查找最近的 ctx 变量。
 func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.AnalyzeResult, error) {
 	fset := token.NewFileSet()
 	astFile, err := parser.ParseFile(fset, file, nil, parser.ParseComments)
@@ -19,7 +19,7 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 		return nil, fmt.Errorf("parse file %s: %w", file, err)
 	}
 
-	// Find the function containing the target line
+	// 查找包含目标行的函数
 	targetFunc := findEnclosingFunc(astFile, fset, line)
 	if targetFunc == nil {
 		return &types.AnalyzeResult{
@@ -33,10 +33,10 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 		}, nil
 	}
 
-	// Detect log library from function name
+	// 根据函数名检测日志库
 	logLib := detectLogLib(logFuncName)
 
-	// Check if function has ctx parameter
+	// 检查函数是否有 ctx 参数
 	ctxParamName, hasCtx := findCtxParam(targetFunc)
 
 	if hasCtx {
@@ -54,7 +54,7 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 		}, nil
 	}
 
-	// No ctx in function signature — search for ctx in function body
+	// 函数签名中没有 ctx — 在函数体中搜索 ctx
 	localCtx := findLocalCtxVar(targetFunc, fset, line)
 	if localCtx != "" {
 		return &types.AnalyzeResult{
@@ -71,7 +71,7 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 		}, nil
 	}
 
-	// No ctx available at all
+	// 完全没有可用的 ctx
 	return &types.AnalyzeResult{
 		Location: types.FileLocation{
 			File:     file,
@@ -84,7 +84,7 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 	}, nil
 }
 
-// findEnclosingFunc finds the function declaration or function literal containing the given line.
+// findEnclosingFunc 查找包含给定行的函数声明或函数字面量。
 func findEnclosingFunc(file *ast.File, fset *token.FileSet, targetLine int) *ast.FuncDecl {
 	var result *ast.FuncDecl
 
@@ -97,7 +97,7 @@ func findEnclosingFunc(file *ast.File, fset *token.FileSet, targetLine int) *ast
 		end := fset.Position(fn.End()).Line
 		if targetLine >= start && targetLine <= end {
 			result = fn
-			return false // Found it, stop descending
+			return false // 找到了，停止向下遍历
 		}
 		return true
 	})
@@ -105,8 +105,8 @@ func findEnclosingFunc(file *ast.File, fset *token.FileSet, targetLine int) *ast
 	return result
 }
 
-// findCtxParam checks if the function has a parameter of type context.Context.
-// Returns the parameter name and true if found.
+// findCtxParam 检查函数是否有 context.Context 类型的参数。
+// 如果找到，返回参数名和 true。
 func findCtxParam(fn *ast.FuncDecl) (string, bool) {
 	if fn == nil || fn.Type.Params == nil {
 		return "", false
@@ -114,7 +114,7 @@ func findCtxParam(fn *ast.FuncDecl) (string, bool) {
 
 	for _, param := range fn.Type.Params.List {
 		if isContextType(param.Type) {
-			// Return the first parameter name
+			// 返回第一个参数名
 			if len(param.Names) > 0 {
 				return param.Names[0].Name, true
 			}
@@ -124,22 +124,22 @@ func findCtxParam(fn *ast.FuncDecl) (string, bool) {
 	return "", false
 }
 
-// isContextType checks if an AST type expression is context.Context or fiber.Ctx.
+// isContextType 检查 AST 类型表达式是否为 context.Context 或 fiber.Ctx。
 func isContextType(expr ast.Expr) bool {
-	// Check for context.Context
+	// 检查 context.Context
 	if sel, ok := expr.(*ast.SelectorExpr); ok {
 		if ident, ok := sel.X.(*ast.Ident); ok {
 			if ident.Name == "context" && sel.Sel.Name == "Context" {
 				return true
 			}
-			// Check for fiber.Ctx
+			// 检查 fiber.Ctx
 			if sel.Sel.Name == "Ctx" {
 				return true
 			}
 		}
 	}
 
-	// Check for *fiber.Ctx (pointer type)
+	// 检查 *fiber.Ctx（指针类型）
 	if star, ok := expr.(*ast.StarExpr); ok {
 		return isContextType(star.X)
 	}
@@ -147,8 +147,7 @@ func isContextType(expr ast.Expr) bool {
 	return false
 }
 
-// findLocalCtxVar searches the function body for local variables of type context.Context
-// that are assigned before the target line.
+// findLocalCtxVar 在函数体中搜索在目标行之前赋值的 context.Context 类型的局部变量。
 func findLocalCtxVar(fn *ast.FuncDecl, fset *token.FileSet, targetLine int) string {
 	if fn == nil || fn.Body == nil {
 		return ""
@@ -164,11 +163,11 @@ func findLocalCtxVar(fn *ast.FuncDecl, fset *token.FileSet, targetLine int) stri
 
 		line := fset.Position(assign.Pos()).Line
 		if line >= targetLine {
-			return false // Don't look past the target line
+			return false // 不要在目标行之后继续查找
 		}
 
-		// Check for: ctx := something.Context() or ctx := context.Background()
-		// or: ctx, cancel := context.WithCancel(parent)
+		// 检查：ctx := something.Context() 或 ctx := context.Background()
+		// 或：ctx, cancel := context.WithCancel(parent)
 		for i, rhs := range assign.Rhs {
 			if isCtxCreationExpr(rhs) || isContextWithExpr(rhs) {
 				if i < len(assign.Lhs) {
@@ -188,7 +187,7 @@ func findLocalCtxVar(fn *ast.FuncDecl, fset *token.FileSet, targetLine int) stri
 	return ctxVar
 }
 
-// isCtxCreationExpr checks if an expression creates a context (context.Background(), context.TODO(), etc.)
+// isCtxCreationExpr 检查表达式是否创建了 context（context.Background()、context.TODO() 等）。
 func isCtxCreationExpr(expr ast.Expr) bool {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -209,7 +208,7 @@ func isCtxCreationExpr(expr ast.Expr) bool {
 	return name == "Background" || name == "TODO"
 }
 
-// isContextWithExpr checks if an expression is context.With* (WithCancel, WithTimeout, etc.)
+// isContextWithExpr 检查表达式是否为 context.With*（WithCancel、WithTimeout 等）。
 func isContextWithExpr(expr ast.Expr) bool {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -226,7 +225,7 @@ func isContextWithExpr(expr ast.Expr) bool {
 	return ident.Name == "context" && strings.HasPrefix(sel.Sel.Name, "With")
 }
 
-// detectLogLib determines the log library from the function name.
+// detectLogLib 根据函数名判断日志库。
 func detectLogLib(funcName string) string {
 	if strings.HasPrefix(funcName, "slog.") {
 		return "slog"
@@ -234,11 +233,11 @@ func detectLogLib(funcName string) string {
 	if strings.HasPrefix(funcName, "log.") {
 		return "fiber"
 	}
-	// logrus functions are just the function name without prefix
+	// logrus 函数名没有前缀
 	return "logrus"
 }
 
-// determineFixType returns the fix strategy based on the log library.
+// determineFixType 根据日志库返回修复策略。
 func determineFixType(logLib string) string {
 	switch logLib {
 	case "slog":

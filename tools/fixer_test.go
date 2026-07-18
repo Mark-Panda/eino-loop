@@ -49,7 +49,7 @@ func HandleRequest(ctx context.Context) {
 		t.Fatal("expected fix to be applied")
 	}
 
-	// Read the fixed file
+	// 读取修复后的文件
 	content, _ := os.ReadFile(filePath)
 	fixed := string(content)
 
@@ -212,14 +212,14 @@ func DoWork(ctx context.Context) {
 		{Library: "slog", Functions: []string{"Info", "Error"}, CtxForm: "Context"},
 	}
 
-	// Fix all calls iteratively — re-scan after each fix since line numbers shift
-	for i := 0; i < 10; i++ { // Safety limit
+	// 迭代修复所有调用 — 每次修复后重新扫描，因为行号会发生变化
+	for i := 0; i < 10; i++ { // 安全上限
 		remaining, _ := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
 		if len(remaining) == 0 {
 			break
 		}
 
-		// Fix the first remaining issue
+		// 修复第一个剩余问题
 		loc := remaining[0]
 		analysis := types.AnalyzeResult{
 			Location:    loc,

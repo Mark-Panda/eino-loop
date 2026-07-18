@@ -13,7 +13,7 @@ import (
 	"github.com/Mark-Panda/eino-loop/config"
 )
 
-// VerifyCompile runs go build on the worktree and returns compilation errors.
+// VerifyCompile 在工作树上运行 go build 并返回编译错误。
 func VerifyCompile(ctx context.Context, worktreePath string) (bool, []types.CompileError, error) {
 	cmd := exec.CommandContext(ctx, "go", "build", "./...")
 	cmd.Dir = worktreePath
@@ -27,10 +27,10 @@ func VerifyCompile(ctx context.Context, worktreePath string) (bool, []types.Comp
 	return false, errors, nil
 }
 
-// compileErrorPattern matches Go compiler errors like: ./file.go:12:3: error message
+// compileErrorPattern 匹配 Go 编译器错误，如：./file.go:12:3: error message
 var compileErrorPattern = regexp.MustCompile(`^\.?/?([^:]+):(\d+)(?::(\d+))?:\s+(.+)$`)
 
-// parseCompileErrors extracts structured errors from go build output.
+// parseCompileErrors 从 go build 输出中提取结构化错误。
 func parseCompileErrors(output string) []types.CompileError {
 	var errors []types.CompileError
 	scanner := bufio.NewScanner(strings.NewReader(output))
@@ -53,15 +53,15 @@ func parseCompileErrors(output string) []types.CompileError {
 	return errors
 }
 
-// VerifyRescan re-scans the worktree for remaining log issues and compares with original.
+// VerifyRescan 重新扫描工作树中剩余的日志问题，并与原始问题进行比较。
 func VerifyRescan(ctx context.Context, worktreePath string, original []types.FileLocation, logFuncs []LogFunc) (bool, []types.FileLocation, error) {
-	// Re-scan the entire worktree
+	// 重新扫描整个工作树
 	current, err := FindLogsWithoutContext(ctx, worktreePath, logFuncs)
 	if err != nil {
 		return false, nil, fmt.Errorf("rescan: %w", err)
 	}
 
-	// Build a set of original issues for comparison
+	// 构建原始问题的集合用于比较
 	type issueKey struct {
 		File string
 		Line int
@@ -71,20 +71,20 @@ func VerifyRescan(ctx context.Context, worktreePath string, original []types.Fil
 		originalSet[issueKey{File: loc.File, Line: loc.Line}] = true
 	}
 
-	// Check which original issues still remain
+	// 检查哪些原始问题仍然存在
 	var remaining []types.FileLocation
 	for _, loc := range current {
-		// Normalize file path (remove worktree prefix if present)
+		// 规范化文件路径（移除工作树前缀）
 		normalizedFile := loc.File
 		if strings.HasPrefix(normalizedFile, worktreePath) {
 			normalizedFile = strings.TrimPrefix(normalizedFile, worktreePath)
 			normalizedFile = strings.TrimPrefix(normalizedFile, "/")
 		}
 
-		// Check if this was an original issue (by matching file suffix and line)
+		// 检查这是否是原始问题（通过匹配文件后缀和行号）
 		for origKey := range originalSet {
 			if strings.HasSuffix(normalizedFile, origKey.File) || strings.HasSuffix(origKey.File, normalizedFile) {
-				// Same file — if same line or nearby line, it's likely the same issue
+				// 同一文件 — 如果行号相同或接近，则很可能是同一个问题
 				if loc.Line == origKey.Line || (loc.Line >= origKey.Line-2 && loc.Line <= origKey.Line+2) {
 					remaining = append(remaining, loc)
 					break
@@ -97,9 +97,9 @@ func VerifyRescan(ctx context.Context, worktreePath string, original []types.Fil
 	return allFixed, remaining, nil
 }
 
-// VerifyRegression runs go vet and optionally go test on the worktree.
+// VerifyRegression 在工作树上运行 go vet 以及可选的 go test。
 func VerifyRegression(ctx context.Context, worktreePath string, runTests bool) (vetPass bool, testPass bool, errors []string, err error) {
-	// Level 3a: go vet
+	// 第 3 级 a：go vet
 	vetCmd := exec.CommandContext(ctx, "go", "vet", "./...")
 	vetCmd.Dir = worktreePath
 	vetOutput, vetErr := vetCmd.CombinedOutput()
@@ -108,8 +108,8 @@ func VerifyRegression(ctx context.Context, worktreePath string, runTests bool) (
 		errors = append(errors, fmt.Sprintf("go vet failed: %s", string(vetOutput)))
 	}
 
-	// Level 3b: go test (optional)
-	testPass = true // Default to pass if not running tests
+	// 第 3 级 b：go test（可选）
+	testPass = true // 如果不运行测试则默认通过
 	if runTests {
 		testCmd := exec.CommandContext(ctx, "go", "test", "-count=1", "-timeout", "5m", "./...")
 		testCmd.Dir = worktreePath
@@ -123,7 +123,7 @@ func VerifyRegression(ctx context.Context, worktreePath string, runTests bool) (
 	return vetPass, testPass, errors, nil
 }
 
-// RollbackFix reverts changes to a specific file using git checkout.
+// RollbackFix 使用 git checkout 回滚对特定文件的更改。
 func RollbackFix(ctx context.Context, worktreePath, file string) error {
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--", file)
 	cmd.Dir = worktreePath
@@ -134,7 +134,7 @@ func RollbackFix(ctx context.Context, worktreePath, file string) error {
 	return nil
 }
 
-// RollbackAll reverts all changes in the worktree.
+// RollbackAll 回滚工作树中的所有更改。
 func RollbackAll(ctx context.Context, worktreePath string) error {
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--", ".")
 	cmd.Dir = worktreePath
@@ -145,12 +145,12 @@ func RollbackAll(ctx context.Context, worktreePath string) error {
 	return nil
 }
 
-// VerifyAndRetry implements the full verify-retry loop for a single repository.
-// Returns the final verification result after all retry attempts.
+// VerifyAndRetry 实现单个仓库的完整验证-重试循环。
+// 返回所有重试尝试后的最终验证结果。
 func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string, fixResult types.FixResult, fixFn func(ctx context.Context) (int, error)) types.VerifyResult {
 	maxRetries := cfg.MaxRetries
 
-	// Convert config.LogFunc to tools.LogFunc
+	// 将 config.LogFunc 转换为 tools.LogFunc
 	logFuncs := make([]LogFunc, len(cfg.LogFunctions))
 	for i, lf := range cfg.LogFunctions {
 		logFuncs[i] = LogFunc{
@@ -161,7 +161,7 @@ func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string
 	}
 
 	for round := 0; round <= maxRetries; round++ {
-		// Level 1: Compile verification
+		// 第 1 级：编译验证
 		compileOK, compileErrors, err := VerifyCompile(ctx, worktreePath)
 		if err != nil {
 			return types.VerifyResult{
@@ -173,7 +173,7 @@ func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string
 		}
 
 		if !compileOK {
-			// Rollback and retry fixing
+			// 回滚并重试修复
 			RollbackAll(ctx, worktreePath)
 			if round < maxRetries {
 				fixFn(ctx)
@@ -188,7 +188,7 @@ func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string
 			}
 		}
 
-		// Level 2: Rescan verification
+		// 第 2 级：重新扫描验证
 		allFixed, remaining, err := VerifyRescan(ctx, worktreePath, fixResult.OriginalIssues, logFuncs)
 		if err != nil {
 			return types.VerifyResult{
@@ -202,7 +202,7 @@ func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string
 
 		if !allFixed {
 			if round < maxRetries {
-				// Fix remaining issues
+				// 修复剩余问题
 				fixFn(ctx)
 				continue
 			}
@@ -216,7 +216,7 @@ func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string
 			}
 		}
 
-		// Level 3: Regression verification
+		// 第 3 级：回归验证
 		vetPass, _, regressErrors, _ := VerifyRegression(ctx, worktreePath, false)
 		if !vetPass {
 			return types.VerifyResult{
@@ -229,7 +229,7 @@ func VerifyAndRetry(ctx context.Context, cfg *config.Config, worktreePath string
 			}
 		}
 
-		// All checks passed!
+		// 所有检查通过！
 		_ = regressErrors
 		return types.VerifyResult{
 			CompileOK:      true,

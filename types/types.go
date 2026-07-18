@@ -1,6 +1,6 @@
 package types
 
-// FileLocation represents a log call site that needs fixing.
+// FileLocation 表示一个需要修复的日志调用位置。
 type FileLocation struct {
 	File     string
 	Line     int
@@ -8,7 +8,7 @@ type FileLocation struct {
 	LogExpr  string
 }
 
-// AnalyzeResult contains the analysis of a log call site.
+// AnalyzeResult 包含对日志调用位置的分析结果。
 type AnalyzeResult struct {
 	Location   FileLocation
 	LogLib     string // "slog" / "fiber" / "logrus"
@@ -18,14 +18,14 @@ type AnalyzeResult struct {
 	RiskLevel  string // "low" / "medium" / "high"
 }
 
-// CompileError represents a Go compilation error.
+// CompileError 表示一个 Go 编译错误。
 type CompileError struct {
 	File    string
 	Line    int
 	Message string
 }
 
-// FixResult contains the result of fixing a single repository.
+// FixResult 包含单个仓库的修复结果。
 type FixResult struct {
 	Repo           string
 	Branch         string
@@ -38,7 +38,7 @@ type FixResult struct {
 	Errors         []string
 }
 
-// VerifyResult contains the verification result after fixing.
+// VerifyResult 包含修复后的验证结果。
 type VerifyResult struct {
 	CompileOK      bool
 	AllIssuesFixed bool
@@ -50,17 +50,17 @@ type VerifyResult struct {
 	NeedsHuman     bool
 }
 
-// AllPassed returns true if all verification levels passed.
+// AllPassed 返回所有验证级别是否全部通过。
 func (v VerifyResult) AllPassed() bool {
 	return v.CompileOK && v.AllIssuesFixed && v.RegressionFree
 }
 
-// CanRetry returns true if we can still retry fixing.
+// CanRetry 返回是否还可以继续重试修复。
 func (v VerifyResult) CanRetry() bool {
 	return !v.NeedsHuman && v.RetryCount < v.MaxRetries
 }
 
-// RepoFixResult is the final result for a single repository.
+// RepoFixResult 是单个仓库的最终结果。
 type RepoFixResult struct {
 	Repo         string
 	Branch       string
@@ -70,7 +70,7 @@ type RepoFixResult struct {
 	RetryRounds  int
 }
 
-// ReportSummary contains aggregate statistics.
+// ReportSummary 包含汇总统计信息。
 type ReportSummary struct {
 	TotalRepos   int
 	ProblemRepos int

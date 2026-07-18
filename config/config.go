@@ -7,37 +7,37 @@ import (
 	"time"
 )
 
-// Config holds all configuration for the eino-loop system.
+// Config 包含 eino-loop 系统的所有配置。
 type Config struct {
-	// Repo settings
-	RepoRoot     string // Root directory containing Go repositories
-	TargetBranch string // Target branch to scan (default: master)
-	FixBranchTpl string // Fix branch name template
+	// 仓库设置
+	RepoRoot     string // 包含 Go 仓库的根目录
+	TargetBranch string // 要扫描的目标分支（默认：master）
+	FixBranchTpl string // 修复分支名称模板
 
-	// Scan settings
+	// 扫描设置
 	ScanInterval time.Duration
 	MaxRepos     int
-	MaxRetries   int // Max fix-verify retry rounds (default: 3)
-	DryRun       bool // Only scan, don't fix
+	MaxRetries   int // 修复-验证的最大重试轮数（默认：3）
+	DryRun       bool // 仅扫描，不修复
 
-	// Log functions to detect
+	// 需要检测的日志函数
 	LogFunctions []LogFunc
 
-	// Feishu settings
+	// 飞书设置
 	FeishuEnabled  bool
-	FeishuChatID   string // Feishu group chat ID
-	FeishuCLIPath  string // Path to lark-cli binary
-	FeishuDocSpace string // Feishu document space ID
+	FeishuChatID   string // 飞书群聊 ID
+	FeishuCLIPath  string // lark-cli 二进制文件路径
+	FeishuDocSpace string // 飞书文档空间 ID
 }
 
-// LogFunc describes a log library and its functions to detect.
+// LogFunc 描述一个日志库及其需要检测的函数。
 type LogFunc struct {
 	Library   string   // "slog" / "fiber" / "logrus"
 	Functions []string // ["Info", "Warn", "Error", ...]
-	CtxForm   string   // WithContext call pattern
+	CtxForm   string   // WithContext 调用模式
 }
 
-// DefaultLogFunctions returns the standard log functions to detect per SKILL.md.
+// DefaultLogFunctions 根据 SKILL.md 返回标准的待检测日志函数。
 func DefaultLogFunctions() []LogFunc {
 	return []LogFunc{
 		{
@@ -58,7 +58,7 @@ func DefaultLogFunctions() []LogFunc {
 	}
 }
 
-// Load reads configuration from environment variables with sensible defaults.
+// Load 从环境变量读取配置，并提供合理的默认值。
 func Load() *Config {
 	cfg := &Config{
 		RepoRoot:     envOrDefault("EINO_LOOP_REPO_ROOT", "."),
@@ -78,7 +78,7 @@ func Load() *Config {
 	return cfg
 }
 
-// FixBranchName generates the fix branch name from the template.
+// FixBranchName 根据模板生成修复分支名称。
 func (c *Config) FixBranchName() string {
 	date := time.Now().Format("20060102")
 	return strings.ReplaceAll(c.FixBranchTpl, "{date}", date)

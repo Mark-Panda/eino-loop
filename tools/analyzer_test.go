@@ -76,7 +76,7 @@ func TestAnalyzeLogCallsite_FiberLog(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "fiber.go")
 
-	// Note: no ctx in function → risk=high, fixType=skip
+	// 注意：函数中没有 ctx → risk=high，fixType=skip
 	content := `package main
 
 import "github.com/gofiber/fiber/v2/log"
@@ -95,7 +95,7 @@ func handler() {
 	if result.LogLib != "fiber" {
 		t.Errorf("expected LogLib='fiber', got '%s'", result.LogLib)
 	}
-	// No ctx available → skip
+	// 没有可用的 ctx → 跳过
 	if result.FixType != "skip" {
 		t.Errorf("expected FixType='skip', got '%s'", result.FixType)
 	}

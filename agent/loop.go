@@ -13,23 +13,23 @@ import (
 	"github.com/Mark-Panda/eino-loop/types"
 )
 
-// LoopInput is the input to the entire loop pipeline.
+// LoopInput 是整个循环管道的输入。
 type LoopInput struct {
 	RepoRoot string
 }
 
-// LoopRunner is the interface for the compiled loop graph.
+// LoopRunner 是编译后的循环图的接口。
 type LoopRunner interface {
 	Invoke(ctx context.Context, input LoopInput) (string, error)
 }
 
-// BuildLoopGraph builds and compiles the pipeline.
-// Pipeline: Scanner → Puller → Detector → Analyzer → Fixer → Verifier → (retry) → Reporter → Feishu
+// BuildLoopGraph 构建并编译管道。
+// 管道：Scanner → Puller → Detector → Analyzer → Fixer → Verifier → (重试) → Reporter → Feishu
 func BuildLoopGraph(cfg *config.Config) (LoopRunner, error) {
 	return &graphRunner{cfg: cfg}, nil
 }
 
-// graphRunner implements the full pipeline as a directed graph.
+// graphRunner 将完整管道实现为有向图。
 type graphRunner struct {
 	cfg *config.Config
 }
@@ -83,17 +83,17 @@ func (r *graphRunner) Invoke(ctx context.Context, input LoopInput) (string, erro
 	return report, nil
 }
 
-// processRepo runs the full pipeline for a single repository.
+// processRepo 对单个仓库执行完整管道。
 func (r *graphRunner) processRepo(ctx context.Context, repoPath, repoName string) (*types.RepoFixResult, error) {
 	cfg := r.cfg
 
-	// Pull latest
+	// 拉取最新代码
 	log.Printf("[Puller] Pulling latest %s for %s", cfg.TargetBranch, repoName)
 	if err := tools.PullLatest(ctx, repoPath, cfg.TargetBranch); err != nil {
 		return nil, fmt.Errorf("pull latest: %w", err)
 	}
 
-	// Detect log issues
+	// 检测日志问题
 	log.Printf("[Detector] Scanning for log calls without context")
 	locations, err := tools.FindLogsWithoutContext(ctx, repoPath, convertLogFuncs(cfg.LogFunctions))
 	if err != nil {
@@ -122,14 +122,14 @@ func (r *graphRunner) processRepo(ctx context.Context, repoPath, repoName string
 		}, nil
 	}
 
-	// Create fix branch
+	// 创建修复分支
 	log.Printf("[Fixer] Creating fix branch for %s", repoName)
 	branchName, worktreePath, err := tools.CreateFixBranch(ctx, repoPath, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create fix branch: %w", err)
 	}
 
-	// Analyze and fix
+	// 分析并修复
 	fixResult := types.FixResult{
 		Repo:           repoName,
 		Branch:         branchName,
@@ -158,7 +158,7 @@ func (r *graphRunner) processRepo(ctx context.Context, repoPath, repoName string
 		}, nil
 	}
 
-	// Verify with retry loop
+	// 验证与重试循环
 	log.Printf("[Verifier] Starting verification for %s", repoName)
 	verifyResult := tools.VerifyAndRetry(ctx, cfg, worktreePath, fixResult, func(ctx context.Context) (int, error) {
 		remaining, _ := tools.FindLogsWithoutContext(ctx, worktreePath, convertLogFuncs(cfg.LogFunctions))
@@ -169,7 +169,7 @@ func (r *graphRunner) processRepo(ctx context.Context, repoPath, repoName string
 	log.Printf("[Verifier] Result for %s: compile=%v allFixed=%v regression=%v retries=%d",
 		repoName, verifyResult.CompileOK, verifyResult.AllIssuesFixed, verifyResult.RegressionFree, verifyResult.RetryCount)
 
-	// Commit if verification passed
+	// 验证通过后提交
 	var commitHash string
 	if verifyResult.AllPassed() {
 		commitMsg := fmt.Sprintf("fix: add WithContext to %d log calls\n\nAuto-fixed by eino-loop\nRepository: %s\nFixes: %d\nSkipped: %d",
@@ -194,7 +194,7 @@ func (r *graphRunner) processRepo(ctx context.Context, repoPath, repoName string
 	}, nil
 }
 
-// analyzeAndFix analyzes each location and applies fixes.
+// analyzeAndFix 分析每个位置并应用修复。
 func (r *graphRunner) analyzeAndFix(ctx context.Context, worktreePath string, locations []types.FileLocation) (fixed int, skipped int, changedFiles []string, errors []string) {
 	changedSet := make(map[string]bool)
 
@@ -234,7 +234,7 @@ func (r *graphRunner) analyzeAndFix(ctx context.Context, worktreePath string, lo
 	return fixed, skipped, changedFiles, errors
 }
 
-// sendToFeishu sends the report to Feishu.
+// sendToFeishu 将报告发送到飞书。
 func (r *graphRunner) sendToFeishu(ctx context.Context, results []types.RepoFixResult, summary types.ReportSummary) {
 	cfg := r.cfg
 

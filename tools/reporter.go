@@ -9,7 +9,7 @@ import (
 	"github.com/Mark-Panda/eino-loop/types"
 )
 
-// GenerateReport generates a markdown report from all repo fix results.
+// GenerateReport 根据所有仓库修复结果生成 markdown 报告。
 func GenerateReport(ctx context.Context, results []types.RepoFixResult) (string, types.ReportSummary) {
 	summary := types.ReportSummary{
 		TotalRepos: len(results),
@@ -35,7 +35,7 @@ func GenerateReport(ctx context.Context, results []types.RepoFixResult) (string,
 	b.WriteString("# Log WithContext 修复报告\n")
 	b.WriteString(fmt.Sprintf("生成时间: %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
 
-	// Summary table
+	// 摘要表格
 	b.WriteString("## 扫描摘要\n\n")
 	b.WriteString("| 指标 | 数量 |\n")
 	b.WriteString("|------|------|\n")
@@ -47,7 +47,7 @@ func GenerateReport(ctx context.Context, results []types.RepoFixResult) (string,
 	b.WriteString(fmt.Sprintf("| 验证通过 | %d ✅ |\n", summary.FixedRepos))
 	b.WriteString(fmt.Sprintf("| 需人工审查 | %d ⚠️ |\n\n", summary.FailedRepos))
 
-	// Repository details
+	// 仓库详情
 	b.WriteString("## 仓库详情\n\n")
 	for _, r := range results {
 		b.WriteString(formatRepoResult(r))
@@ -60,7 +60,7 @@ func GenerateReport(ctx context.Context, results []types.RepoFixResult) (string,
 func formatRepoResult(r types.RepoFixResult) string {
 	var b strings.Builder
 
-	// Header with status icon
+	// 带状态图标的标题
 	status := "✅"
 	if r.VerifyResult.NeedsHuman {
 		status = "⚠️"
@@ -69,7 +69,7 @@ func formatRepoResult(r types.RepoFixResult) string {
 	}
 	b.WriteString(fmt.Sprintf("### 📦 %s %s\n", r.Repo, status))
 
-	// Branch and commit
+	// 分支和提交
 	if r.Branch != "" {
 		b.WriteString(fmt.Sprintf("- **分支**: %s\n", r.Branch))
 	}
@@ -77,16 +77,16 @@ func formatRepoResult(r types.RepoFixResult) string {
 		b.WriteString(fmt.Sprintf("- **Commit**: %s\n", r.CommitHash[:7]))
 	}
 
-	// Verify result
+	// 验证结果
 	verifyStatus := formatVerifyStatus(r.VerifyResult)
 	b.WriteString(fmt.Sprintf("- **验证**: %s\n", verifyStatus))
 
-	// Retry rounds
+	// 修复轮次
 	if r.RetryRounds > 0 {
 		b.WriteString(fmt.Sprintf("- **修复轮次**: %d 轮\n", r.RetryRounds))
 	}
 
-	// Files changed
+	// 变更文件
 	if len(r.FixResult.FilesChanged) > 0 {
 		b.WriteString("- **修复文件**:\n")
 		b.WriteString("  | 文件 | 修复数 |\n")
@@ -96,7 +96,7 @@ func formatRepoResult(r types.RepoFixResult) string {
 		}
 	}
 
-	// Remaining issues
+	// 遗留问题
 	if len(r.VerifyResult.Remaining) > 0 {
 		b.WriteString("- **遗留问题**:\n")
 		b.WriteString("  | 文件 | 行号 | 函数 |\n")
@@ -107,7 +107,7 @@ func formatRepoResult(r types.RepoFixResult) string {
 		b.WriteString("- **建议**: 手动为缺少 ctx 的函数添加 context 参数传递\n")
 	}
 
-	// Errors
+	// 错误
 	if len(r.FixResult.Errors) > 0 {
 		b.WriteString("- **错误**:\n")
 		for _, e := range r.FixResult.Errors {
@@ -138,7 +138,7 @@ func formatVerifyStatus(v types.VerifyResult) string {
 	return strings.Join(parts, " ")
 }
 
-// GenerateFeishuDocContent generates markdown content suitable for Feishu document.
+// GenerateFeishuDocContent 生成适合飞书文档的 markdown 内容。
 func GenerateFeishuDocContent(results []types.RepoFixResult) string {
 	report, _ := GenerateReport(context.Background(), results)
 	return report

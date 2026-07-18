@@ -9,10 +9,10 @@ import (
 	"github.com/Mark-Panda/eino-loop/types"
 )
 
-// CreateDoc creates a Feishu cloud document from markdown content.
-// Uses lark-cli to create the document.
+// CreateDoc 从 markdown 内容创建飞书云文档。
+// 使用 lark-cli 创建文档。
 func CreateDoc(ctx context.Context, cliPath, title, content, spaceID string) (docURL, docID string, err error) {
-	// Write content to temp file
+	// 将内容写入临时文件
 	tmpFile, err := os.CreateTemp("", "eino-loop-report-*.md")
 	if err != nil {
 		return "", "", fmt.Errorf("create temp file: %w", err)
@@ -25,7 +25,7 @@ func CreateDoc(ctx context.Context, cliPath, title, content, spaceID string) (do
 	}
 	tmpFile.Close()
 
-	// Build command args
+	// 构建命令参数
 	args := []string{"doc", "create", "--title", title, "--content-file", tmpFile.Name()}
 	if spaceID != "" {
 		args = append(args, "--space-id", spaceID)
@@ -37,15 +37,15 @@ func CreateDoc(ctx context.Context, cliPath, title, content, spaceID string) (do
 		return "", "", fmt.Errorf("lark-cli doc create: %w: %s", err, string(output))
 	}
 
-	// Parse output to get doc URL and ID
-	// lark-cli output format: "Document created: <url> (id: <id>)"
+	// 解析输出以获取文档 URL 和 ID
+	// lark-cli 输出格式："Document created: <url> (id: <id>)"
 	docURL, docID = parseDocOutput(string(output))
 	return docURL, docID, nil
 }
 
-// SendCard sends an interactive message card to a Feishu chat.
+// SendCard 向飞书群聊发送交互式消息卡片。
 func SendCard(ctx context.Context, cliPath, chatID, cardJSON string) (messageID string, err error) {
-	// Write card JSON to temp file
+	// 将卡片 JSON 写入临时文件
 	tmpFile, err := os.CreateTemp("", "eino-loop-card-*.json")
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
@@ -71,13 +71,13 @@ func SendCard(ctx context.Context, cliPath, chatID, cardJSON string) (messageID 
 	return parseMessageOutput(string(output)), nil
 }
 
-// IsAvailable checks if lark-cli is installed and accessible.
+// IsAvailable 检查 lark-cli 是否已安装且可访问。
 func IsAvailable(cliPath string) bool {
 	_, err := exec.LookPath(cliPath)
 	return err == nil
 }
 
-// BuildMessageCard builds a Feishu interactive message card JSON.
+// BuildMessageCard 构建飞书交互式消息卡片 JSON。
 func BuildMessageCard(docURL string, summary types.ReportSummary) string {
 	status := "✅ 全部修复通过"
 	if summary.FailedRepos > 0 {
@@ -113,15 +113,15 @@ func BuildMessageCard(docURL string, summary types.ReportSummary) string {
 }`, status, summary.TotalRepos, summary.ProblemRepos, summary.FixedRepos, summary.TotalFixes, docURL)
 }
 
-// parseDocOutput extracts doc URL and ID from lark-cli output.
+// parseDocOutput 从 lark-cli 输出中提取文档 URL 和 ID。
 func parseDocOutput(output string) (url, id string) {
-	// Simple parsing - adjust based on actual lark-cli output format
-	// Expected: "Document created: https://xxx.feishu.cn/docx/xxx (id: xxx)"
+	// 简单解析 - 根据实际 lark-cli 输出格式调整
+	// 预期格式："Document created: https://xxx.feishu.cn/docx/xxx (id: xxx)"
 	fmt.Sscanf(output, "Document created: %s (id: %s)", &url, &id)
 	return url, id
 }
 
-// parseMessageOutput extracts message ID from lark-cli output.
+// parseMessageOutput 从 lark-cli 输出中提取消息 ID。
 func parseMessageOutput(output string) string {
 	var msgID string
 	fmt.Sscanf(output, "Message sent: %s", &msgID)

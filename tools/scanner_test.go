@@ -8,14 +8,14 @@ import (
 )
 
 func TestScanRepositories(t *testing.T) {
-	// Create temp dir with fake repos
+	// 创建包含假仓库的临时目录
 	tmpDir := t.TempDir()
 
-	// Create a repo-like directory
+	// 创建一个类似仓库的目录
 	repoDir := filepath.Join(tmpDir, "my-repo")
 	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
 
-	// Create a non-repo directory
+	// 创建一个非仓库目录
 	nonRepoDir := filepath.Join(tmpDir, "not-a-repo")
 	os.MkdirAll(nonRepoDir, 0755)
 
@@ -53,7 +53,7 @@ func TestScanRepositories_MaxRepos(t *testing.T) {
 func TestFindLogsWithoutContext_Slog(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// File with slog calls missing context
+	// 包含缺少上下文的 slog 调用的文件
 	content := `package main
 
 import "log/slog"
@@ -79,7 +79,7 @@ func doWorkWithContext(ctx context.Context) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should find 3 issues: slog.Info (line 6), slog.Error (line 7), slog.Info (line 12)
+	// 应该找到 3 个问题：slog.Info（第 6 行）、slog.Error（第 7 行）、slog.Info（第 12 行）
 	if len(results) != 3 {
 		t.Fatalf("expected 3 log issues, got %d", len(results))
 		for i, r := range results {
@@ -87,7 +87,7 @@ func doWorkWithContext(ctx context.Context) {
 		}
 	}
 
-	// Verify the compliant call was NOT flagged
+	// 验证合规的调用未被标记
 	for _, r := range results {
 		if r.FuncName == "slog.InfoContext" {
 			t.Errorf("should not flag slog.InfoContext at line %d", r.Line)
@@ -146,7 +146,7 @@ func process(entry *logrus.Entry) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should find 1 issue: entry.Info (not entry.WithContext(ctx).Info)
+	// 应该找到 1 个问题：entry.Info（而非 entry.WithContext(ctx).Info）
 	if len(results) != 1 {
 		t.Fatalf("expected 1 logrus log issue, got %d", len(results))
 	}
