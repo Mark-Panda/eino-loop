@@ -137,6 +137,7 @@ type LogFunc struct {
 }
 
 // scanFileForIssues 扫描单个 Go 文件中的日志问题。
+// 扩展支持：结构体嵌入日志字段、seelog、resty SetContext
 func scanFileForIssues(filePath string, logFuncs []LogFunc) ([]types.FileLocation, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
@@ -144,8 +145,11 @@ func scanFileForIssues(filePath string, logFuncs []LogFunc) ([]types.FileLocatio
 		return nil, err
 	}
 
-	// 收集导入信息，判断是否使用了 go-logger 或 gorm
+	// 收集导入信息
 	imports := collectImports(file)
+
+	// 收集结构体中的 logger 字段名
+	loggerFields := collectLoggerFields(file)
 
 	var results []types.FileLocation
 
@@ -159,16 +163,38 @@ func scanFileForIssues(filePath string, logFuncs []LogFunc) ([]types.FileLocatio
 		line := pos.Line
 		expr := formatExpr(fset, call)
 
-		// 检测 go-logger 日志调用缺少 WithContext
+		// 1. 检测 go-logger 包级调用缺少 WithContext
 		if hasGoLoggerImport(imports) {
 			if loc := checkGoLoggerCall(call, imports, filePath, line, expr); loc != nil {
 				results = append(results, *loc)
 			}
 		}
 
-		// 检测 gorm 数据库操作缺少 WithContext
+		// 2. 检测结构体嵌入的 logger 字段调用缺少 WithContext
+		//    模式：s.log.Info("msg"), uc.log.Error("msg"), u.log.Errorf("msg")
+		if len(loggerFields) > 0 {
+			if loc := checkStructLoggerCall(call, loggerFields, filePath, line, expr); loc != nil {
+				results = append(results, *loc)
+			}
+		}
+
+		// 3. 检测 gorm 数据库操作缺少 WithContext
 		if hasGormImport(imports) {
 			if loc := checkGormCall(call, imports, filePath, line, expr); loc != nil {
+				results = append(results, *loc)
+			}
+		}
+
+		// 4. 检测 seelog 调用（不支持 WithContext，需要迁移到 go-logger）
+		if hasSeelogImport(imports) {
+			if loc := checkSeelogCall(call, imports, filePath, line, expr); loc != nil {
+				results = append(results, *loc)
+			}
+		}
+
+		// 5. 检测 resty HTTP client 缺少 SetContext
+		if hasRestyImport(imports) {
+			if loc := checkRestyCall(call, imports, filePath, line, expr); loc != nil {
 				results = append(results, *loc)
 			}
 		}
@@ -497,6 +523,274 @@ func isGormCallChain(sel *ast.SelectorExpr, imports []importInfo) bool {
 		break
 	}
 	return false
+}
+
+// ========== 结构体嵌入日志字段检测 ==========
+
+// loggerFieldPatterns 匹配 go-logger 类型的字段名模式
+var loggerFieldPatterns = []string{
+	"log", "logger", "lg", "l",
+}
+
+// collectLoggerFields 收集文件中结构体的 logger 类型字段名。
+// 查找类型为 *logger.Logger、*zap.Logger、*logrus.Entry 等的字段。
+func collectLoggerFields(file *ast.File) map[string]bool {
+	fields := make(map[string]bool)
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		typeSpec, ok := n.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+
+		structType, ok := typeSpec.Type.(*ast.StructType)
+		if !ok {
+			return true
+		}
+
+		for _, field := range structType.Fields.List {
+			if len(field.Names) == 0 {
+				continue
+			}
+			fieldName := field.Names[0].Name
+
+			// 检查字段类型是否是 logger 相关
+			if isLoggerType(field.Type) {
+				fields[fieldName] = true
+				continue
+			}
+
+			// 也匹配常见的 logger 字段名模式
+			lowerName := strings.ToLower(fieldName)
+			for _, pattern := range loggerFieldPatterns {
+				if lowerName == pattern {
+					fields[fieldName] = true
+					break
+				}
+			}
+		}
+
+		return true
+	})
+
+	return fields
+}
+
+// isLoggerType 检查类型是否是 logger 相关类型。
+func isLoggerType(expr ast.Expr) bool {
+	switch t := expr.(type) {
+	case *ast.StarExpr:
+		return isLoggerType(t.X)
+	case *ast.SelectorExpr:
+		typeName := t.Sel.Name
+		// 匹配 *logger.Logger、*zap.Logger、*logrus.Entry、*slog.Logger 等
+		if typeName == "Logger" || typeName == "Entry" || typeName == "SugaredLogger" {
+			return true
+		}
+		// 匹配 go-logger 包的类型
+		if ident, ok := t.X.(*ast.Ident); ok {
+			if ident.Name == "logger" || ident.Name == "zap" || ident.Name == "logrus" || ident.Name == "slog" {
+				return true
+			}
+		}
+	case *ast.Ident:
+		// 匹配同包内的 Logger 类型定义
+		if t.Name == "Logger" {
+			return true
+		}
+	}
+	return false
+}
+
+// checkStructLoggerCall 检测结构体嵌入的 logger 字段调用是否缺少 WithContext。
+// 模式：s.log.Info("msg")、uc.log.Error("msg")、u.log.Errorf("msg")
+func checkStructLoggerCall(call *ast.CallExpr, loggerFields map[string]bool, file string, line int, expr string) *types.FileLocation {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+
+	funcName := sel.Sel.Name
+
+	// 检查是否是日志函数
+	if !goLoggerLogFuncs[funcName] {
+		return nil
+	}
+
+	// 检查调用链中是否有 WithContext
+	if _, isCall := sel.X.(*ast.CallExpr); isCall {
+		if innerSel, ok := sel.X.(*ast.CallExpr).Fun.(*ast.SelectorExpr); ok {
+			if innerSel.Sel.Name == "WithContext" {
+				return nil
+			}
+		}
+	}
+
+	// 检查接收者是否是结构体字段调用：receiver.log.Info()
+	// sel.X 应该是 SelectorExpr：X=Ident(receiver), Sel=Ident(log)
+	if innerSel, ok := sel.X.(*ast.SelectorExpr); ok {
+		fieldName := innerSel.Sel.Name
+		if loggerFields[fieldName] {
+			return &types.FileLocation{
+				File:     file,
+				Line:     line,
+				FuncName: fmt.Sprintf(".%s.%s", fieldName, funcName),
+				LogExpr:  expr,
+			}
+		}
+	}
+
+	return nil
+}
+
+// ========== seelog 检测 ==========
+
+// seelogLogFuncs seelog 中的日志函数
+var seelogLogFuncs = map[string]bool{
+	"Trace": true, "Debug": true, "Info": true, "Warn": true, "Error": true, "Critical": true,
+	"Tracef": true, "Debugf": true, "Infof": true, "Warnf": true, "Errorf": true, "Criticalf": true,
+}
+
+// hasSeelogImport 检查是否导入了 seelog 包
+func hasSeelogImport(imports []importInfo) bool {
+	for _, imp := range imports {
+		if strings.Contains(imp.path, "seelog") || strings.Contains(imp.path, "cihub/seelog") {
+			return true
+		}
+	}
+	return false
+}
+
+// checkSeelogCall 检测 seelog 调用。
+// seelog 不支持 WithContext，需要迁移到 go-logger。
+func checkSeelogCall(call *ast.CallExpr, imports []importInfo, file string, line int, expr string) *types.FileLocation {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+
+	funcName := sel.Sel.Name
+	if !seelogLogFuncs[funcName] {
+		return nil
+	}
+
+	// 检查是否是 seelog 包调用
+	if ident, ok := sel.X.(*ast.Ident); ok {
+		if ident.Name == "seelog" {
+			return &types.FileLocation{
+				File:     file,
+				Line:     line,
+				FuncName: fmt.Sprintf("seelog.%s", funcName),
+				LogExpr:  expr,
+			}
+		}
+	}
+
+	return nil
+}
+
+// ========== resty HTTP client 检测 ==========
+
+// hasRestyImport 检查是否导入了 resty 包
+func hasRestyImport(imports []importInfo) bool {
+	for _, imp := range imports {
+		if strings.Contains(imp.path, "resty") || strings.Contains(imp.path, "go-resty") {
+			return true
+		}
+	}
+	return false
+}
+
+// checkRestyCall 检测 resty HTTP client 调用缺少 SetContext。
+// 模式：resty.New().R().Get(url) → 需要 .SetContext(ctx)
+//       client.R().Get(url) → 需要 .SetContext(ctx)
+func checkRestyCall(call *ast.CallExpr, imports []importInfo, file string, line int, expr string) *types.FileLocation {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+
+	// 检查是否是 HTTP 方法调用（Get/Post/Put/Delete/Patch/Head/Options）
+	httpMethods := map[string]bool{
+		"Get": true, "Post": true, "Put": true, "Delete": true,
+		"Patch": true, "Head": true, "Options": true,
+	}
+
+	funcName := sel.Sel.Name
+	if !httpMethods[funcName] {
+		return nil
+	}
+
+	// 向上遍历调用链，检查是否有 SetContext
+	if hasSetContextInChain(call) {
+		return nil
+	}
+
+	// 检查是否是 resty 请求调用（R().Get() 或 client.R().Get()）
+	if isRestyCallChain(sel) {
+		return &types.FileLocation{
+			File:     file,
+			Line:     line,
+			FuncName: fmt.Sprintf("resty.%s", funcName),
+			LogExpr:  expr,
+		}
+	}
+
+	return nil
+}
+
+// hasSetContextInChain 向上遍历调用链，检查是否已有 SetContext。
+func hasSetContextInChain(call *ast.CallExpr) bool {
+	current := call.Fun
+	for {
+		sel, ok := current.(*ast.SelectorExpr)
+		if !ok {
+			break
+		}
+		if sel.Sel.Name == "SetContext" {
+			return true
+		}
+		if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+			current = innerCall.Fun
+			continue
+		}
+		break
+	}
+	return false
+}
+
+// isRestyCallChain 判断调用链是否来自 resty 请求。
+func isRestyCallChain(sel *ast.SelectorExpr) bool {
+	// 模式1: resty.New().R().Get() → sel.X 是 CallExpr(R())
+	if callExpr, ok := sel.X.(*ast.CallExpr); ok {
+		if innerSel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+			// R() 调用
+			if innerSel.Sel.Name == "R" {
+				return true
+			}
+			// SetResult().Get() 等链式调用
+			if isRestyChainMethod(innerSel.Sel.Name) {
+				return isRestyCallChain(innerSel)
+			}
+		}
+	}
+
+	// 模式2: client.R().Get() → sel.X 是 CallExpr(R())
+	// 已在模式1 中覆盖
+
+	return false
+}
+
+// isRestyChainMethod 检查是否是 resty 链式方法
+func isRestyChainMethod(name string) bool {
+	chainMethods := map[string]bool{
+		"R": true, "SetResult": true, "SetBody": true, "SetHeader": true,
+		"SetHeaders": true, "SetQueryParam": true, "SetQueryParams": true,
+		"SetFormData": true, "SetPathParam": true, "SetPathParams": true,
+		"SetBasicAuth": true, "SetAuthToken": true, "SetCookie": true,
+		"SetCookies": true, "SetContentLength": true, "SetHostURL": true,
+	}
+	return chainMethods[name]
 }
 
 // ========== 辅助函数 ==========

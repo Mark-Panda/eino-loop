@@ -232,6 +232,104 @@ func TestPathValidator(t *testing.T) {
 	}
 }
 
+func TestFindLogsWithoutContext_StructLogger(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 结构体嵌入 logger 字段调用缺少 WithContext
+	content := `package service
+
+import ycLogger "gitlab.yc345.tv/backend/go-logger/logger"
+
+type UserService struct {
+	log *ycLogger.Logger
+}
+
+func (s *UserService) GetUser(id int64) {
+	s.log.Info("getting user")
+	s.log.Errorf("user not found: %d", id)
+}
+
+func (s *UserService) GetUserOK(ctx context.Context, id int64) {
+	s.log.WithContext(ctx).Info("getting user")
+}
+`
+	writeGoFile(t, filepath.Join(tmpDir, "service.go"), content)
+
+	logFuncs := []LogFunc{
+		{Library: "go-logger", Functions: []string{"Info", "Error", "Errorf"}, CtxForm: "WithContext"},
+	}
+
+	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
+	if err != nil {
+		t.Fatalf("意外错误: %v", err)
+	}
+
+	// 应该发现 2 个问题：s.log.Info (行12), s.log.Errorf (行13)
+	// s.log.WithContext(ctx).Info (行17) 是合规的
+	if len(results) != 2 {
+		t.Fatalf("期望 2 个结构体 logger 问题，得到 %d", len(results))
+		for i, r := range results {
+			t.Logf("  [%d] %s:%d %s", i, r.File, r.Line, r.FuncName)
+		}
+	}
+}
+
+func TestFindLogsWithoutContext_Seelog(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `package main
+
+import "github.com/cihub/seelog"
+
+func doWork() {
+	seelog.Info("starting work")
+	seelog.Errorf("failed: %v", err)
+}
+`
+	writeGoFile(t, filepath.Join(tmpDir, "main.go"), content)
+
+	logFuncs := []LogFunc{
+		{Library: "seelog", Functions: []string{"Info", "Error", "Errorf"}, CtxForm: ""},
+	}
+
+	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
+	if err != nil {
+		t.Fatalf("意外错误: %v", err)
+	}
+
+	// 应该发现 2 个 seelog 调用
+	if len(results) != 2 {
+		t.Fatalf("期望 2 个 seelog 问题，得到 %d", len(results))
+	}
+}
+
+func TestFindLogsWithoutContext_Resty(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `package client
+
+import "github.com/go-resty/resty/v2"
+
+func fetchData(url string) error {
+	_, err := resty.New().R().SetResult(&result).Get(url)
+	return err
+}
+`
+	writeGoFile(t, filepath.Join(tmpDir, "client.go"), content)
+
+	logFuncs := []LogFunc{}
+
+	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
+	if err != nil {
+		t.Fatalf("意外错误: %v", err)
+	}
+
+	// 应该发现 1 个 resty 调用缺少 SetContext
+	if len(results) != 1 {
+		t.Fatalf("期望 1 个 resty 问题，得到 %d", len(results))
+	}
+}
+
 func writeGoFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
