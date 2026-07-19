@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -99,9 +100,25 @@ func NewMultiAgentLoop(ctx context.Context, cfg *config.Config) (*MultiAgentLoop
 	}, nil
 }
 
-// Run 执行多 Agent 任务
+// RunMetrics Agent 执行指标
+type RunMetrics struct {
+	StartTime    time.Time
+	EndTime      time.Time
+	Duration     time.Duration
+	EventCount   int
+	ErrorCount   int
+	AgentCalls   map[string]int // 每个 SubAgent 的调用次数
+	LastAgentName string
+}
+
+// Run 执行多 Agent 任务，返回结果和执行指标
 func (m *MultiAgentLoop) Run(ctx context.Context, task string) (string, error) {
 	log.Printf("[MultiAgent] 开始执行任务")
+
+	metrics := &RunMetrics{
+		StartTime:  time.Now(),
+		AgentCalls: make(map[string]int),
+	}
 
 	iter := m.runner.Query(ctx, task)
 
@@ -111,9 +128,22 @@ func (m *MultiAgentLoop) Run(ctx context.Context, task string) (string, error) {
 		if !hasMore {
 			break
 		}
+
+		metrics.EventCount++
+
 		if event.Err != nil {
-			return result, fmt.Errorf("Agent 执行错误: %w", event.Err)
+			metrics.ErrorCount++
+			log.Printf("[MultiAgent] 错误 (Agent: %s): %v", event.AgentName, event.Err)
+			// 不立即返回，继续处理后续事件（部分失败容忍）
+			continue
 		}
+
+		// 记录 Agent 调用
+		if event.AgentName != "" {
+			metrics.AgentCalls[event.AgentName]++
+			metrics.LastAgentName = event.AgentName
+		}
+
 		if event.Output != nil && event.Output.MessageOutput != nil && event.Output.MessageOutput.Message != nil {
 			content := event.Output.MessageOutput.Message.Content
 			if content != "" {
@@ -123,7 +153,25 @@ func (m *MultiAgentLoop) Run(ctx context.Context, task string) (string, error) {
 		}
 	}
 
+	// 输出执行指标
+	metrics.EndTime = time.Now()
+	metrics.Duration = metrics.EndTime.Sub(metrics.StartTime)
+	logMetrics(metrics)
+
+	if metrics.ErrorCount > 0 && result == "" {
+		return result, fmt.Errorf("Agent 执行失败，共 %d 个错误", metrics.ErrorCount)
+	}
+
 	return result, nil
+}
+
+// logMetrics 输出执行指标
+func logMetrics(m *RunMetrics) {
+	log.Printf("[指标] 执行耗时: %s", m.Duration)
+	log.Printf("[指标] 事件总数: %d, 错误数: %d", m.EventCount, m.ErrorCount)
+	for agent, count := range m.AgentCalls {
+		log.Printf("[指标] %s 调用次数: %d", agent, count)
+	}
 }
 
 // buildScannerAgent 创建 Scanner SubAgent

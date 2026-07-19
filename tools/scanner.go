@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -15,6 +16,58 @@ import (
 
 	"github.com/Mark-Panda/eino-loop/types"
 )
+
+// ========== 增量扫描 ==========
+
+// FindModifiedFiles 使用 git diff 获取自上次扫描以来修改的文件。
+// 用于增量扫描，只检查有变更的文件。
+func FindModifiedFiles(ctx context.Context, repoPath, sinceRef string) ([]string, error) {
+	// 获取自 sinceRef 以来修改的 .go 文件
+	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "--diff-filter=ACMR",
+		sinceRef, "--", "*.go")
+	cmd.Dir = repoPath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git diff 失败: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var goFiles []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && strings.HasSuffix(line, ".go") && !strings.HasSuffix(line, "_test.go") {
+			goFiles = append(goFiles, filepath.Join(repoPath, line))
+		}
+	}
+	return goFiles, nil
+}
+
+// FindLogsWithoutContextIncremental 增量扫描：只检查自上次扫描以来修改的文件。
+func FindLogsWithoutContextIncremental(ctx context.Context, repoPath, sinceRef string, logFuncs []LogFunc) ([]types.FileLocation, error) {
+	modifiedFiles, err := FindModifiedFiles(ctx, repoPath, sinceRef)
+	if err != nil {
+		// 回退到全量扫描
+		return FindLogsWithoutContext(ctx, repoPath, logFuncs)
+	}
+
+	if len(modifiedFiles) == 0 {
+		return nil, nil
+	}
+
+	var results []types.FileLocation
+	for _, filePath := range modifiedFiles {
+		if ctx.Err() != nil {
+			return results, ctx.Err()
+		}
+		locations, scanErr := scanFileForIssues(filePath, logFuncs)
+		if scanErr != nil {
+			continue
+		}
+		results = append(results, locations...)
+	}
+
+	return results, nil
+}
 
 // ========== 仓库扫描 ==========
 
