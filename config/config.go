@@ -48,19 +48,24 @@ type LogFunc struct {
 func DefaultLogFunctions() []LogFunc {
 	return []LogFunc{
 		{
-			Library:   "slog",
-			Functions: []string{"Info", "Debug", "Warn", "Error"},
-			CtxForm:   "Context", // slog.Info → slog.InfoContext
+			Library:   "go-logger",
+			Functions: []string{"Info", "Warn", "Error", "Debug", "Fatal", "Infof", "Warnf", "Errorf", "Debugf", "Fatalf", "Infow", "Warnw", "Errorw", "Debugw"},
+			CtxForm:   "WithContext",
 		},
 		{
-			Library:   "fiber",
-			Functions: []string{"Info", "Debug", "Warn", "Error", "Fatal", "Panic"},
-			CtxForm:   "WithContext", // log.Info → log.WithContext(c).Info
+			Library:   "gorm",
+			Functions: []string{"First", "Find", "Last", "Take", "Count", "Pluck", "Scan", "Create", "Save", "Update", "Updates", "Delete", "Exec"},
+			CtxForm:   "WithContext",
 		},
 		{
-			Library:   "logrus",
-			Functions: []string{"Info", "Debug", "Warn", "Error", "Fatal", "Panic", "Trace", "Print"},
-			CtxForm:   "WithContext", // entry.Info → entry.WithContext(ctx).Info
+			Library:   "seelog",
+			Functions: []string{"Info", "Warn", "Error", "Debug", "Critical", "Infof", "Warnf", "Errorf", "Debugf", "Criticalf"},
+			CtxForm:   "",
+		},
+		{
+			Library:   "resty",
+			Functions: []string{"Get", "Post", "Put", "Delete", "Patch", "Head", "Options"},
+			CtxForm:   "SetContext",
 		},
 	}
 }

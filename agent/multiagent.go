@@ -120,7 +120,7 @@ type RunMetrics struct {
 func (m *MultiAgentLoop) Run(ctx context.Context, task string) (string, error) {
 	log.Printf("[MultiAgent] 开始执行任务")
 
-	// 初始化 eino callbacks 处理器（替代自建 LoopLogger）
+	// 初始化 eino callbacks 处理器并注入框架
 	taskID := fmt.Sprintf("task-%d", time.Now().Unix())
 	callback, err := NewLoopCallbackHandler(".eino-loop/logs", taskID)
 	if err != nil {
@@ -128,6 +128,16 @@ func (m *MultiAgentLoop) Run(ctx context.Context, task string) (string, error) {
 	} else {
 		m.callback = callback
 		defer callback.Close()
+		// 注入到 eino callbacks 框架，自动触发 OnStart/OnEnd/OnError
+		ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{
+			Name:      "eino-loop",
+			Type:      "loop",
+			Component: "orchestrator",
+		}, callbacks.NewHandlerBuilder().
+			OnStartFn(callback.OnStart).
+			OnEndFn(callback.OnEnd).
+			OnErrorFn(callback.OnError).
+			Build())
 	}
 
 	metrics := &RunMetrics{
