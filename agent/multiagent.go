@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	openai "github.com/cloudwego/eino-ext/components/model/openai"
@@ -20,8 +21,10 @@ import (
 
 // MultiAgentLoop 是基于多 Agent 编排的循环修复系统
 type MultiAgentLoop struct {
-	runner *adk.Runner
-	cfg    *config.Config
+	runner   *adk.Runner
+	cfg      *config.Config
+	callback *LoopCallbackHandler
+	checkpoint *FileCheckPointStore
 }
 
 // NewMultiAgentLoop 创建多 Agent 编排系统
@@ -89,14 +92,16 @@ func NewMultiAgentLoop(ctx context.Context, cfg *config.Config) (*MultiAgentLoop
 		return nil, fmt.Errorf("创建编排 Agent 失败: %w", err)
 	}
 
-	// 创建 Runner
+	// 创建 Runner（复用 eino checkpoint store）
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
-		Agent: orchestrator,
+		Agent:           orchestrator,
+		CheckPointStore: NewFileCheckPointStore(".eino-loop/state"),
 	})
 
 	return &MultiAgentLoop{
-		runner: runner,
-		cfg:    cfg,
+		runner:   runner,
+		cfg:      cfg,
+		checkpoint: NewFileCheckPointStore(".eino-loop/state"),
 	}, nil
 }
 
@@ -114,6 +119,16 @@ type RunMetrics struct {
 // Run 执行多 Agent 任务，返回结果和执行指标
 func (m *MultiAgentLoop) Run(ctx context.Context, task string) (string, error) {
 	log.Printf("[MultiAgent] 开始执行任务")
+
+	// 初始化 eino callbacks 处理器（替代自建 LoopLogger）
+	taskID := fmt.Sprintf("task-%d", time.Now().Unix())
+	callback, err := NewLoopCallbackHandler(".eino-loop/logs", taskID)
+	if err != nil {
+		log.Printf("[警告] 创建回调处理器失败: %v，使用简单日志", err)
+	} else {
+		m.callback = callback
+		defer callback.Close()
+	}
 
 	metrics := &RunMetrics{
 		StartTime:  time.Now(),
@@ -134,6 +149,13 @@ func (m *MultiAgentLoop) Run(ctx context.Context, task string) (string, error) {
 		if event.Err != nil {
 			metrics.ErrorCount++
 			log.Printf("[MultiAgent] 错误 (Agent: %s): %v", event.AgentName, event.Err)
+			// 通过 eino callbacks 记录错误（自动分类）
+			if m.callback != nil {
+				m.callback.OnError(ctx, &callbacks.RunInfo{
+					Name:      event.AgentName,
+					Component: "agent",
+				}, event.Err)
+			}
 			// 不立即返回，继续处理后续事件（部分失败容忍）
 			continue
 		}
