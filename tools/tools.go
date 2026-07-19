@@ -185,12 +185,17 @@ func newAnalyzeTool() tool.InvokableTool {
 	)
 }
 
-// newFixTool 创建修复工具
+// newFixTool 创建修复工具（带路径安全校验）
 func newFixTool(cfg *config.Config) tool.InvokableTool {
+	validator := NewPathValidator(cfg.RepoRoot)
 	return mustNewTool(
 		"apply_fix",
-		"对单个日志调用点执行 AST 重写修复。根据 fix_type 执行不同的修复策略：context_param 将 slog.Info 改为 slog.InfoContext(ctx)；logger_receiver 将 log.Info 改为 log.WithContext(ctx).Info。修复前会创建 git worktree 分支。返回是否修复成功。",
+		"对单个日志调用点执行 AST 重写修复。根据 fix_type 执行不同的修复策略。修复前会校验路径安全性。",
 		func(ctx context.Context, input FixInput) (string, error) {
+			// 路径安全校验
+			if err := validator.ValidatePath(input.File); err != nil {
+				return toJSON(map[string]interface{}{"applied": false, "error": fmt.Sprintf("路径安全校验失败: %v", err)}), nil
+			}
 			if input.NearestCtx == "" || input.FixType == "skip" {
 				return toJSON(map[string]interface{}{"applied": false, "reason": "无可用 ctx，跳过修复"}), nil
 			}

@@ -19,12 +19,20 @@ import (
 
 // ApplyLogFix 对单个日志调用位置应用 AST 重写修复。
 // 如果修复成功应用则返回 true，以及 diff 内容。
+// 路径安全钩子：校验文件路径在允许范围内。
 func ApplyLogFix(ctx context.Context, worktreePath string, analysis types.AnalyzeResult) (bool, string, error) {
 	if analysis.FixType == "skip" || analysis.NearestCtx == "" {
 		return false, "", nil
 	}
 
 	filePath := analysis.Location.File
+
+	// 路径安全校验
+	validator := NewPathValidator(worktreePath)
+	if err := validator.ValidatePath(filePath); err != nil {
+		return false, "", fmt.Errorf("路径安全校验失败: %w", err)
+	}
+
 	line := analysis.Location.Line
 
 	fset := token.NewFileSet()

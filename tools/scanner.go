@@ -16,12 +16,14 @@ import (
 	"github.com/Mark-Panda/eino-loop/types"
 )
 
-// ScanRepositories 扫描仓库根目录，查找 Go 仓库。
-// 返回仓库的绝对路径列表（包含 .git 的目录）。
+// ========== 仓库扫描 ==========
+
+// ScanRepositories 扫描仓库根目录下的所有 Go 代码仓库。
+// 返回包含 .git 目录的仓库路径列表。
 func ScanRepositories(ctx context.Context, repoRoot string, maxRepos int) ([]string, error) {
 	entries, err := os.ReadDir(repoRoot)
 	if err != nil {
-		return nil, fmt.Errorf("read repo root %s: %w", repoRoot, err)
+		return nil, fmt.Errorf("读取仓库根目录 %s 失败: %w", repoRoot, err)
 	}
 
 	var repos []string
@@ -43,17 +45,16 @@ func ScanRepositories(ctx context.Context, repoRoot string, maxRepos int) ([]str
 	return repos, nil
 }
 
-// PullLatest 拉取目标分支的最新代码。
-// 切换到目标分支并拉取最新变更。
+// PullLatest 拉取指定仓库目标分支的最新代码。
 func PullLatest(ctx context.Context, repoPath, branch string) error {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("open repo %s: %w", repoPath, err)
+		return fmt.Errorf("打开仓库 %s 失败: %w", repoPath, err)
 	}
 
 	w, err := repo.Worktree()
 	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
+		return fmt.Errorf("获取工作树失败: %w", err)
 	}
 
 	// 切换到目标分支
@@ -63,42 +64,46 @@ func PullLatest(ctx context.Context, repoPath, branch string) error {
 		Force:  true,
 	})
 	if err != nil {
-		// 备选方案：尝试作为远程分支
+		// 回退：尝试远程分支
 		err = w.Checkout(&git.CheckoutOptions{
 			Branch: plumbing.NewRemoteReferenceName("origin", branch),
 			Create: false,
 		})
 		if err != nil {
-			return fmt.Errorf("checkout branch %s: %w", branch, err)
+			return fmt.Errorf("切换分支 %s 失败: %w", branch, err)
 		}
 	}
 
-	// 拉取最新代码
+	// 拉取最新
 	err = w.PullContext(ctx, &git.PullOptions{
 		RemoteName:    "origin",
 		ReferenceName: branchRef,
 		Force:         true,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return fmt.Errorf("pull branch %s: %w", branch, err)
+		return fmt.Errorf("拉取分支 %s 失败: %w", branch, err)
 	}
 
 	return nil
 }
 
-// FindLogsWithoutContext 扫描 Go 文件，查找缺少 WithContext 的日志调用。
-// 根据 SKILL.md 规则检测 slog、fiber-log 和 logrus 模式。
+// ========== 日志问题检测 ==========
+
+// FindLogsWithoutContext 根据 SKILL 规则检测日志中缺少 WithContext 的调用。
+// 重点检测：
+// 1. gitlab.yc345.tv/backend/go-logger 包的日志调用
+// 2. gorm.io/gorm 数据库 CRUD 操作缺少 WithContext(ctx)
 func FindLogsWithoutContext(ctx context.Context, repoPath string, logFuncs []LogFunc) ([]types.FileLocation, error) {
 	var results []types.FileLocation
 
 	err := filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // 跳过无法访问的文件
+			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// 跳过 vendor、.git、测试文件
+		// 跳过 vendor、.git、testdata、_test.go
 		if info.IsDir() {
 			base := info.Name()
 			if base == "vendor" || base == ".git" || base == "testdata" {
@@ -110,56 +115,37 @@ func FindLogsWithoutContext(ctx context.Context, repoPath string, logFuncs []Log
 			return nil
 		}
 
-		locations, scanErr := scanFileForLogs(path, logFuncs)
+		locations, scanErr := scanFileForIssues(path, logFuncs)
 		if scanErr != nil {
-			return nil // 跳过解析出错的文件
+			return nil
 		}
 		results = append(results, locations...)
 		return nil
 	})
 
 	if err != nil {
-		return results, fmt.Errorf("walk repo %s: %w", repoPath, err)
+		return results, fmt.Errorf("遍历仓库 %s 失败: %w", repoPath, err)
 	}
 	return results, nil
 }
 
 // LogFunc 描述一个日志库及其需要检测的函数。
 type LogFunc struct {
-	Library   string
-	Functions []string
-	CtxForm   string
+	Library   string   // "go-logger" / "gorm"
+	Functions []string // 需要检测的函数名
+	CtxForm   string   // WithContext 调用模式
 }
 
-// scanFileForLogs 解析 Go 文件并查找缺少上下文的日志调用。
-func scanFileForLogs(filePath string, logFuncs []LogFunc) ([]types.FileLocation, error) {
+// scanFileForIssues 扫描单个 Go 文件中的日志问题。
+func scanFileForIssues(filePath string, logFuncs []LogFunc) ([]types.FileLocation, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 	if err != nil {
 		return nil, err
 	}
 
-	// 为每个日志库构建查找映射
-	slogFuncs := make(map[string]string)     // funcName -> library
-	fiberFuncs := make(map[string]string)
-	logrusFuncs := make(map[string]string)
-
-	for _, lf := range logFuncs {
-		switch lf.Library {
-		case "slog":
-			for _, f := range lf.Functions {
-				slogFuncs[f] = lf.Library
-			}
-		case "fiber":
-			for _, f := range lf.Functions {
-				fiberFuncs[f] = lf.Library
-			}
-		case "logrus":
-			for _, f := range lf.Functions {
-				logrusFuncs[f] = lf.Library
-			}
-		}
-	}
+	// 收集导入信息，判断是否使用了 go-logger 或 gorm
+	imports := collectImports(file)
 
 	var results []types.FileLocation
 
@@ -173,22 +159,18 @@ func scanFileForLogs(filePath string, logFuncs []LogFunc) ([]types.FileLocation,
 		line := pos.Line
 		expr := formatExpr(fset, call)
 
-		// 检查 slog.Info(...)、slog.Error(...) 等调用
-		if loc := checkSlogCall(call, slogFuncs, filePath, line, expr); loc != nil {
-			results = append(results, *loc)
-			return true
+		// 检测 go-logger 日志调用缺少 WithContext
+		if hasGoLoggerImport(imports) {
+			if loc := checkGoLoggerCall(call, imports, filePath, line, expr); loc != nil {
+				results = append(results, *loc)
+			}
 		}
 
-		// 检查 fiber 的 log.Info(...)、log.Error(...) 调用
-		if loc := checkFiberCall(call, fiberFuncs, filePath, line, expr); loc != nil {
-			results = append(results, *loc)
-			return true
-		}
-
-		// 检查 logrus 的 entry.Info(...)、entry.Error(...) 调用
-		if loc := checkLogrusCall(call, logrusFuncs, filePath, line, expr); loc != nil {
-			results = append(results, *loc)
-			return true
+		// 检测 gorm 数据库操作缺少 WithContext
+		if hasGormImport(imports) {
+			if loc := checkGormCall(call, imports, filePath, line, expr); loc != nil {
+				results = append(results, *loc)
+			}
 		}
 
 		return true
@@ -197,129 +179,340 @@ func scanFileForLogs(filePath string, logFuncs []LogFunc) ([]types.FileLocation,
 	return results, nil
 }
 
-// checkSlogCall 检测缺少 Context 后缀的 slog.Info/Warn/Error/Debug 调用。
-// 模式：slog.Info("msg") 或 slog.Info("msg", args...)
-// 合规：slog.InfoContext(ctx, "msg") — 跳过这些。
-func checkSlogCall(call *ast.CallExpr, slogFuncs map[string]string, file string, line int, expr string) *types.FileLocation {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return nil
-	}
+// ========== 导入分析 ==========
 
-	// 必须在 "slog" 包上调用
-	ident, ok := sel.X.(*ast.Ident)
-	if !ok || ident.Name != "slog" {
-		return nil
-	}
-
-	funcName := sel.Sel.Name
-
-	// 如果已经有 Context 后缀则跳过（如 InfoContext、ErrorContext）
-	if strings.HasSuffix(funcName, "Context") {
-		return nil
-	}
-
-	// 检查是否为已知的 slog 函数
-	if _, found := slogFuncs[funcName]; !found {
-		return nil
-	}
-
-	// 同样跳过：slog.With(ctx).Info(...) — With 方法已处理上下文
-	// 通过检查调用是否在 slog.Logger 接收者上检测
-	// 我们通过 With 模式单独处理
-
-	return &types.FileLocation{
-		File:     file,
-		Line:     line,
-		FuncName: "slog." + funcName,
-		LogExpr:  expr,
-	}
+// importInfo 存储导入的包信息
+type importInfo struct {
+	name    string // 导入别名（如无别名则为包的最后一段）
+	path    string // 完整导入路径
+	isAlias bool   // 是否有显式别名
 }
 
-// checkFiberCall 检测缺少 WithContext 的 fiber log.Info/Warn/Error 等调用。
-// 模式：log.Info("msg")
-// 合规：log.WithContext(c).Info("msg") — 跳过这些。
-func checkFiberCall(call *ast.CallExpr, fiberFuncs map[string]string, file string, line int, expr string) *types.FileLocation {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return nil
-	}
+// collectImports 收集文件中所有导入的包信息
+func collectImports(file *ast.File) []importInfo {
+	var imports []importInfo
+	for _, imp := range file.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		info := importInfo{path: path}
 
-	ident, ok := sel.X.(*ast.Ident)
-	if !ok {
-		return nil
-	}
+		// 获取包名（路径最后一段）
+		parts := strings.Split(path, "/")
+		info.name = parts[len(parts)-1]
 
-	// 必须在 "log"（fiber 的日志包别名）上调用
-	if ident.Name != "log" {
-		return nil
-	}
-
-	funcName := sel.Sel.Name
-	if _, found := fiberFuncs[funcName]; !found {
-		return nil
-	}
-
-	// 如果在 WithContext() 结果上调用则跳过：log.WithContext(c).Info(...)
-	// 此时 sel.X 应为 CallExpr 而非 Ident。
-	// 由于我们匹配到 sel.X 为 *ast.Ident，这是直接调用 — 需要修复。
-
-	return &types.FileLocation{
-		File:     file,
-		Line:     line,
-		FuncName: "log." + funcName,
-		LogExpr:  expr,
-	}
-}
-
-// checkLogrusCall 检测缺少 WithContext 的 logrus entry.Info/Warn/Error 等调用。
-// 模式：entry.Info("msg")
-// 合规：entry.WithContext(ctx).Info("msg") — 跳过这些。
-func checkLogrusCall(call *ast.CallExpr, logrusFuncs map[string]string, file string, line int, expr string) *types.FileLocation {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return nil
-	}
-
-	// 对于 logrus，接收者通常是 *logrus.Entry 变量
-	// sel.X 应为 Ident（变量名如 "entry"、"log"、"logger"）
-	_, ok = sel.X.(*ast.Ident)
-	if !ok {
-		// 如果 sel.X 是 CallExpr，可能是 entry.WithContext(ctx).Info(...)
-		// 已经合规 — 跳过
-		if _, isCall := sel.X.(*ast.CallExpr); isCall {
-			return nil
+		if imp.Name != nil {
+			info.name = imp.Name.Name
+			info.isAlias = true
 		}
+
+		imports = append(imports, info)
+	}
+	return imports
+}
+
+// hasGoLoggerImport 检查是否导入了 go-logger 包
+func hasGoLoggerImport(imports []importInfo) bool {
+	for _, imp := range imports {
+		if strings.Contains(imp.path, "gitlab.yc345.tv/backend/go-logger") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasGormImport 检查是否导入了 gorm 包
+func hasGormImport(imports []importInfo) bool {
+	for _, imp := range imports {
+		if imp.path == "gorm.io/gorm" || strings.HasPrefix(imp.path, "gorm.io/gorm/") {
+			return true
+		}
+		// 也检查 gen 生成的代码
+		if strings.Contains(imp.path, "gorm.io/gen") {
+			return true
+		}
+	}
+	return false
+}
+
+// getGoLoggerAlias 获取 go-logger 包的别名
+func getGoLoggerAlias(imports []importInfo) string {
+	for _, imp := range imports {
+		if strings.Contains(imp.path, "gitlab.yc345.tv/backend/go-logger") {
+			return imp.name
+		}
+	}
+	return ""
+}
+
+// getGormAlias 获取 gorm 包的别名
+func getGormAlias(imports []importInfo) string {
+	for _, imp := range imports {
+		if imp.path == "gorm.io/gorm" {
+			return imp.name
+		}
+	}
+	return "db" // 常见默认别名
+}
+
+// ========== go-logger 检测 ==========
+
+// goLoggerLogFuncs go-logger 中需要 WithContext 的日志函数
+var goLoggerLogFuncs = map[string]bool{
+	"Info":  true,
+	"Warn":  true,
+	"Error": true,
+	"Debug": true,
+	"Fatal": true,
+	"Panic": true,
+	// 带格式化后缀的版本
+	"Infof":  true,
+	"Warnf":  true,
+	"Errorf":  true,
+	"Debugf":  true,
+	"Fatalf":  true,
+	"Panicf":  true,
+	// 带结构化字段的版本
+	"Infow":  true,
+	"Warnw":  true,
+	"Errorw":  true,
+	"Debugw":  true,
+}
+
+// checkGoLoggerCall 检测 go-logger 日志调用是否缺少 WithContext。
+//
+// 根据 SKILL 规则：
+// - ycLogger.Info("msg") → ycLogger.WithContext(ctx).Info("msg")
+// - ycLogger.GetLogger().Info("msg") → ycLogger.WithContext(ctx).Info("msg")
+//
+// 已合规的调用会跳过：
+// - ycLogger.WithContext(ctx).Info("msg") ✅
+func checkGoLoggerCall(call *ast.CallExpr, imports []importInfo, file string, line int, expr string) *types.FileLocation {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
 		return nil
 	}
 
 	funcName := sel.Sel.Name
-	if _, found := logrusFuncs[funcName]; !found {
+
+	// 检查是否是需要检测的日志函数
+	if !goLoggerLogFuncs[funcName] {
 		return nil
 	}
 
-	// 需要验证这是否确实是 logrus entry。
-	// 启发式判断：如果函数名匹配 logrus 函数且
-	// 导入包含 "logrus"，则很可能是 logrus 调用。
-	// 目前，我们匹配所有符合 logrus 函数名的 *Ident.Func 模式。
-	// 分析器阶段会做更深入的验证。
-
-	return &types.FileLocation{
-		File:     file,
-		Line:     line,
-		FuncName: funcName,
-		LogExpr:  expr,
+	// 检查调用链：如果有 WithContext 在前面，说明已经合规
+	// 形式1: ycLogger.WithContext(ctx).Info("msg")  → sel.X 是 CallExpr
+	if _, isCall := sel.X.(*ast.CallExpr); isCall {
+		// 检查是否是 WithContext 调用
+		if innerSel, ok := sel.X.(*ast.CallExpr).Fun.(*ast.SelectorExpr); ok {
+			if innerSel.Sel.Name == "WithContext" {
+				return nil // 已有 WithContext，跳过
+			}
+		}
 	}
+
+	// 形式2: logger.WithContext(ctx).Info("msg")  → sel.X 是 CallExpr(WithContext)
+	// 已在上面处理
+
+	// 检查是否是 go-logger 包的调用
+	alias := getGoLoggerAlias(imports)
+
+	// 形式3: ycLogger.Info("msg") → sel.X 是 Ident，且名称匹配导入别名
+	if ident, ok := sel.X.(*ast.Ident); ok {
+		if ident.Name == alias || ident.Name == "logger" || ident.Name == "log" {
+			return &types.FileLocation{
+				File:     file,
+				Line:     line,
+				FuncName: fmt.Sprintf("%s.%s", ident.Name, funcName),
+				LogExpr:  expr,
+			}
+		}
+	}
+
+	// 形式4: ycLogger.GetLogger().Info("msg") → sel.X 是 CallExpr
+	if callExpr, ok := sel.X.(*ast.CallExpr); ok {
+		if innerSel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+			if ident, ok := innerSel.X.(*ast.Ident); ok {
+				if (ident.Name == alias || ident.Name == "logger") && innerSel.Sel.Name == "GetLogger" {
+					return &types.FileLocation{
+						File:     file,
+						Line:     line,
+						FuncName: fmt.Sprintf("%s.GetLogger().%s", ident.Name, funcName),
+						LogExpr:  expr,
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
-// formatExpr 将 CallExpr 格式化为可读字符串。
+// ========== gorm 检测 ==========
+
+// gormCrudFuncs gorm 中需要 WithContext 的终端执行函数（不包括链式构建器如 Model/Where/Select）
+var gormCrudFuncs = map[string]bool{
+	// 查询执行
+	"First":       true,
+	"Find":        true,
+	"Last":        true,
+	"Take":        true,
+	"Count":       true,
+	"Pluck":       true,
+	"Scan":        true,
+	"Rows":        true,
+	"Row":         true,
+	"ScanRows":    true,
+	// 创建执行
+	"Create":          true,
+	"CreateInBatches": true,
+	"Save":            true,
+	// 更新执行
+	"Update":        true,
+	"Updates":       true,
+	"UpdateColumn":  true,
+	"UpdateColumns": true,
+	// 删除执行
+	"Delete": true,
+	// 原始 SQL 执行
+	"Exec": true,
+	"Raw":  true,
+}
+
+// gormChainBuilders gorm 链式构建器（不需要单独检查 WithContext，由终端函数统一检查）
+var gormChainBuilders = map[string]bool{
+	"Where": true, "Or": true, "Not": true, "Joins": true,
+	"Preload": true, "Select": true, "Group": true, "Having": true,
+	"Order": true, "Limit": true, "Offset": true, "Distinct": true,
+	"Table": true, "Model": true, "Unscoped": true,
+	"Association": true, "Related": true,
+}
+
+// checkGormCall 检测 gorm 数据库操作是否缺少 WithContext。
+//
+// 根据 SKILL 规则：
+// - db.Model(&User{}).Where("id = ?", id).First(&user) → db.WithContext(ctx).Model(&User{}).Where("id = ?", id).First(&user)
+// - query.User.Where(q.ID.Eq(id)).First() → query.User.WithContext(ctx).Where(q.ID.Eq(id)).First()
+//
+// 已合规的调用会跳过：
+// - db.WithContext(ctx).Model(&User{}).First(&user) ✅
+func checkGormCall(call *ast.CallExpr, imports []importInfo, file string, line int, expr string) *types.FileLocation {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+
+	funcName := sel.Sel.Name
+
+	// 检查是否是需要检测的 CRUD 函数
+	if !gormCrudFuncs[funcName] {
+		return nil
+	}
+
+	// 向上遍历调用链，检查是否有 WithContext
+	if hasWithContextInChain(call) {
+		return nil // 已有 WithContext，跳过
+	}
+
+	// 检查是否是 gorm 相关的调用（通过变量名或调用链判断）
+	if isGormCallChain(sel, imports) {
+		return &types.FileLocation{
+			File:     file,
+			Line:     line,
+			FuncName: fmt.Sprintf("gorm.%s", funcName),
+			LogExpr:  expr,
+		}
+	}
+
+	return nil
+}
+
+// hasWithContextInChain 向上遍历调用链，检查是否已有 WithContext。
+func hasWithContextInChain(call *ast.CallExpr) bool {
+	// 检查当前调用的接收者链
+	current := call.Fun
+	for {
+		sel, ok := current.(*ast.SelectorExpr)
+		if !ok {
+			break
+		}
+
+		// 检查是否是 WithContext 调用
+		if sel.Sel.Name == "WithContext" {
+			return true
+		}
+
+		// 继续向上：如果接收者是另一个方法调用
+		if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+			current = innerCall.Fun
+			continue
+		}
+
+		break
+	}
+	return false
+}
+
+// isGormCallChain 判断调用链是否来自 gorm 相关变量。
+// 检测模式：
+// - db.Xxx() 或 dbVar.Xxx()
+// - r.data.db.Xxx()
+// - query.Xxx()
+// - d.db.Xxx() (结构体字段)
+func isGormCallChain(sel *ast.SelectorExpr, imports []importInfo) bool {
+	// 向上遍历整个调用链，查找根变量名
+	current := sel.X
+	for {
+		// 如果是标识符（变量名），检查是否匹配 gorm 模式
+		if ident, ok := current.(*ast.Ident); ok {
+			name := strings.ToLower(ident.Name)
+			if name == "db" || strings.HasSuffix(name, "db") || strings.HasSuffix(name, "dao") || strings.HasSuffix(name, "repo") || name == "query" || name == "q" {
+				return true
+			}
+			break
+		}
+
+		// 如果是选择器（如 r.data.db），继续向上
+		if innerSel, ok := current.(*ast.SelectorExpr); ok {
+			// 检查当前字段名是否是 gorm 相关
+			fieldName := strings.ToLower(innerSel.Sel.Name)
+			if fieldName == "db" || strings.HasSuffix(fieldName, "db") || strings.HasSuffix(fieldName, "dao") || strings.HasSuffix(fieldName, "repo") {
+				return true
+			}
+			current = innerSel.X
+			continue
+		}
+
+		// 如果是函数调用（如 GetDB()），检查函数名
+		if callExpr, ok := current.(*ast.CallExpr); ok {
+			if innerSel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+				fieldName := strings.ToLower(innerSel.Sel.Name)
+				if strings.Contains(fieldName, "db") || strings.Contains(fieldName, "gorm") || fieldName == "getdb" {
+					return true
+				}
+				current = innerSel.X
+				continue
+			}
+			break
+		}
+
+		break
+	}
+	return false
+}
+
+// ========== 辅助函数 ==========
+
+// isGoFile 检查文件是否是 Go 源文件（排除测试文件）
+func isGoFile(path string) bool {
+	return strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
+}
+
+// formatExpr 将 CallExpr 格式化为可读字符串
 func formatExpr(fset *token.FileSet, call *ast.CallExpr) string {
 	start := fset.Position(call.Pos())
 	end := fset.Position(call.End())
 	if start.Filename != end.Filename {
 		return "<expr>"
 	}
-	// 读取源代码片段
 	data, err := os.ReadFile(start.Filename)
 	if err != nil {
 		return "<expr>"
@@ -334,9 +527,4 @@ func formatExpr(fset *token.FileSet, call *ast.CallExpr) string {
 		}
 	}
 	return "<expr>"
-}
-
-// isGoFile 检查文件路径是否以 .go 结尾且不是测试文件。
-func isGoFile(path string) bool {
-	return strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
 }

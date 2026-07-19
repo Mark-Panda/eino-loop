@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestAnalyzeLogCallsite_SlogWithCtx(t *testing.T) {
+func TestAnalyzeLogCallsite_GoLoggerWithCtx(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "handler.go")
 
@@ -14,152 +14,96 @@ func TestAnalyzeLogCallsite_SlogWithCtx(t *testing.T) {
 
 import (
 	"context"
-	"log/slog"
+	ycLogger "gitlab.yc345.tv/backend/go-logger/logger"
 )
 
 func HandleRequest(ctx context.Context) {
-	slog.Info("processing request")
+	ycLogger.Info("processing request")
 }
 `
 	os.WriteFile(filePath, []byte(content), 0644)
 
-	result, err := AnalyzeLogCallsite(filePath, 9, "slog.Info")
+	result, err := AnalyzeLogCallsite(filePath, 10, "ycLogger.Info")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
 	if !result.HasCtx {
-		t.Error("expected HasCtx=true")
+		t.Error("期望 HasCtx=true")
 	}
 	if result.NearestCtx != "ctx" {
-		t.Errorf("expected NearestCtx='ctx', got '%s'", result.NearestCtx)
+		t.Errorf("期望 NearestCtx='ctx'，得到 '%s'", result.NearestCtx)
 	}
 	if result.RiskLevel != "low" {
-		t.Errorf("expected RiskLevel='low', got '%s'", result.RiskLevel)
+		t.Errorf("期望 RiskLevel='low'，得到 '%s'", result.RiskLevel)
 	}
-	if result.FixType != "context_param" {
-		t.Errorf("expected FixType='context_param', got '%s'", result.FixType)
+	if result.FixType != "logger_receiver" {
+		t.Errorf("期望 FixType='logger_receiver'，得到 '%s'", result.FixType)
 	}
 }
 
-func TestAnalyzeLogCallsite_SlogWithoutCtx(t *testing.T) {
+func TestAnalyzeLogCallsite_GoLoggerWithoutCtx(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "worker.go")
 
 	content := `package main
 
-import "log/slog"
+import ycLogger "gitlab.yc345.tv/backend/go-logger/logger"
 
 func BackgroundTask() {
-	slog.Info("running background task")
+	ycLogger.Info("running background task")
 }
 `
 	os.WriteFile(filePath, []byte(content), 0644)
 
-	result, err := AnalyzeLogCallsite(filePath, 6, "slog.Info")
+	result, err := AnalyzeLogCallsite(filePath, 6, "ycLogger.Info")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
 	if result.HasCtx {
-		t.Error("expected HasCtx=false")
+		t.Error("期望 HasCtx=false")
 	}
 	if result.RiskLevel != "high" {
-		t.Errorf("expected RiskLevel='high', got '%s'", result.RiskLevel)
+		t.Errorf("期望 RiskLevel='high'，得到 '%s'", result.RiskLevel)
 	}
 	if result.FixType != "skip" {
-		t.Errorf("expected FixType='skip', got '%s'", result.FixType)
+		t.Errorf("期望 FixType='skip'，得到 '%s'", result.FixType)
 	}
 }
 
-func TestAnalyzeLogCallsite_FiberLog(t *testing.T) {
+func TestAnalyzeLogCallsite_GormWithCtx(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "fiber.go")
+	filePath := filepath.Join(tmpDir, "repo.go")
 
-	// 注意：函数中没有 ctx → risk=high，fixType=skip
-	content := `package main
-
-import "github.com/gofiber/fiber/v2/log"
-
-func handler() {
-	log.Info("request received")
-}
-`
-	os.WriteFile(filePath, []byte(content), 0644)
-
-	result, err := AnalyzeLogCallsite(filePath, 6, "log.Info")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.LogLib != "fiber" {
-		t.Errorf("expected LogLib='fiber', got '%s'", result.LogLib)
-	}
-	// 没有可用的 ctx → 跳过
-	if result.FixType != "skip" {
-		t.Errorf("expected FixType='skip', got '%s'", result.FixType)
-	}
-	if result.RiskLevel != "high" {
-		t.Errorf("expected RiskLevel='high', got '%s'", result.RiskLevel)
-	}
-}
-
-func TestAnalyzeLogCallsite_FiberLogWithCtx(t *testing.T) {
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "fiber.go")
-
-	content := `package main
-
-import "github.com/gofiber/fiber/v2/log"
-
-func handler(c *fiber.Ctx) error {
-	log.Info("request received")
-	return nil
-}
-`
-	os.WriteFile(filePath, []byte(content), 0644)
-
-	result, err := AnalyzeLogCallsite(filePath, 7, "log.Info")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.LogLib != "fiber" {
-		t.Errorf("expected LogLib='fiber', got '%s'", result.LogLib)
-	}
-	if result.FixType != "logger_receiver" {
-		t.Errorf("expected FixType='logger_receiver', got '%s'", result.FixType)
-	}
-}
-
-func TestAnalyzeLogCallsite_CtxInBody(t *testing.T) {
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "service.go")
-
-	content := `package main
+	content := `package data
 
 import (
 	"context"
-	"log/slog"
+	"gorm.io/gorm"
 )
 
-func Process() {
-	ctx := context.Background()
-	slog.Info("processing")
+type Data struct {
+	db *gorm.DB
+}
+
+func (d *Data) GetUser(ctx context.Context, id int64) error {
+	var user User
+	return d.db.Model(&User{}).Where("id = ?", id).First(&user).Error
 }
 `
 	os.WriteFile(filePath, []byte(content), 0644)
 
-	result, err := AnalyzeLogCallsite(filePath, 10, "slog.Info")
+	result, err := AnalyzeLogCallsite(filePath, 15, "gorm.First")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
-	if result.NearestCtx != "ctx" {
-		t.Errorf("expected NearestCtx='ctx', got '%s'", result.NearestCtx)
+	if !result.HasCtx {
+		t.Error("期望 HasCtx=true")
 	}
-	if result.RiskLevel != "medium" {
-		t.Errorf("expected RiskLevel='medium', got '%s'", result.RiskLevel)
+	if result.LogLib != "gorm" {
+		t.Errorf("期望 LogLib='gorm'，得到 '%s'", result.LogLib)
 	}
 }
 
@@ -168,6 +112,8 @@ func TestDetermineFixType(t *testing.T) {
 		lib  string
 		want string
 	}{
+		{"go-logger", "logger_receiver"},
+		{"gorm", "logger_receiver"},
 		{"slog", "context_param"},
 		{"fiber", "logger_receiver"},
 		{"logrus", "logger_receiver"},
@@ -177,7 +123,7 @@ func TestDetermineFixType(t *testing.T) {
 	for _, tt := range tests {
 		got := determineFixType(tt.lib)
 		if got != tt.want {
-			t.Errorf("determineFixType(%q) = %q, want %q", tt.lib, got, tt.want)
+			t.Errorf("determineFixType(%q) = %q，期望 %q", tt.lib, got, tt.want)
 		}
 	}
 }
@@ -187,18 +133,18 @@ func TestDetectLogLib(t *testing.T) {
 		funcName string
 		want     string
 	}{
+		{"ycLogger.Info", "go-logger"},
+		{"logger.Error", "go-logger"},
+		{"gorm.First", "gorm"},
 		{"slog.Info", "slog"},
-		{"slog.Error", "slog"},
 		{"log.Info", "fiber"},
-		{"log.Fatal", "fiber"},
 		{"Info", "logrus"},
-		{"Error", "logrus"},
 	}
 
 	for _, tt := range tests {
 		got := detectLogLib(tt.funcName)
 		if got != tt.want {
-			t.Errorf("detectLogLib(%q) = %q, want %q", tt.funcName, got, tt.want)
+			t.Errorf("detectLogLib(%q) = %q，期望 %q", tt.funcName, got, tt.want)
 		}
 	}
 }

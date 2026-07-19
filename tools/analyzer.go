@@ -10,13 +10,16 @@ import (
 	"github.com/Mark-Panda/eino-loop/types"
 )
 
-// AnalyzeLogCallsite 分析日志调用位置，确定修复策略。
-// 检查包含该调用的函数是否具有 ctx 参数，并查找最近的 ctx 变量。
-func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.AnalyzeResult, error) {
+// AnalyzeLogCallsite 分析日志调用位置，确定修复方案。
+// 根据 SKILL 规则：
+// - 检查函数是否有 context.Context 或 *fiber.Ctx 参数
+// - 查找最近可用的 ctx 变量
+// - 确定修复类型（go-logger 的 WithContext 或 gorm 的 WithContext）
+func AnalyzeLogCallsite(file string, line int, funcName string) (*types.AnalyzeResult, error) {
 	fset := token.NewFileSet()
 	astFile, err := parser.ParseFile(fset, file, nil, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("parse file %s: %w", file, err)
+		return nil, fmt.Errorf("解析文件 %s 失败: %w", file, err)
 	}
 
 	// 查找包含目标行的函数
@@ -26,15 +29,15 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 			Location: types.FileLocation{
 				File:     file,
 				Line:     line,
-				FuncName: logFuncName,
+				FuncName: funcName,
 			},
 			FixType:   "skip",
 			RiskLevel: "high",
 		}, nil
 	}
 
-	// 根据函数名检测日志库
-	logLib := detectLogLib(logFuncName)
+	// 检测日志库类型
+	logLib := detectLogLib(funcName)
 
 	// 检查函数是否有 ctx 参数
 	ctxParamName, hasCtx := findCtxParam(targetFunc)
@@ -44,7 +47,7 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 			Location: types.FileLocation{
 				File:     file,
 				Line:     line,
-				FuncName: logFuncName,
+				FuncName: funcName,
 			},
 			LogLib:     logLib,
 			FixType:    determineFixType(logLib),
@@ -54,14 +57,14 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 		}, nil
 	}
 
-	// 函数签名中没有 ctx — 在函数体中搜索 ctx
+	// 函数没有 ctx 参数，搜索函数体内的 ctx 变量
 	localCtx := findLocalCtxVar(targetFunc, fset, line)
 	if localCtx != "" {
 		return &types.AnalyzeResult{
 			Location: types.FileLocation{
 				File:     file,
 				Line:     line,
-				FuncName: logFuncName,
+				FuncName: funcName,
 			},
 			LogLib:     logLib,
 			FixType:    determineFixType(logLib),
@@ -71,12 +74,12 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 		}, nil
 	}
 
-	// 完全没有可用的 ctx
+	// 没有可用的 ctx
 	return &types.AnalyzeResult{
 		Location: types.FileLocation{
 			File:     file,
 			Line:     line,
-			FuncName: logFuncName,
+			FuncName: funcName,
 		},
 		LogLib:    logLib,
 		FixType:   "skip",
@@ -84,7 +87,7 @@ func AnalyzeLogCallsite(file string, line int, logFuncName string) (*types.Analy
 	}, nil
 }
 
-// findEnclosingFunc 查找包含给定行的函数声明或函数字面量。
+// findEnclosingFunc 查找包含目标行的函数声明。
 func findEnclosingFunc(file *ast.File, fset *token.FileSet, targetLine int) *ast.FuncDecl {
 	var result *ast.FuncDecl
 
@@ -97,7 +100,7 @@ func findEnclosingFunc(file *ast.File, fset *token.FileSet, targetLine int) *ast
 		end := fset.Position(fn.End()).Line
 		if targetLine >= start && targetLine <= end {
 			result = fn
-			return false // 找到了，停止向下遍历
+			return false
 		}
 		return true
 	})
@@ -105,8 +108,7 @@ func findEnclosingFunc(file *ast.File, fset *token.FileSet, targetLine int) *ast
 	return result
 }
 
-// findCtxParam 检查函数是否有 context.Context 类型的参数。
-// 如果找到，返回参数名和 true。
+// findCtxParam 检查函数是否有 context.Context 或类似上下文参数。
 func findCtxParam(fn *ast.FuncDecl) (string, bool) {
 	if fn == nil || fn.Type.Params == nil {
 		return "", false
@@ -114,7 +116,6 @@ func findCtxParam(fn *ast.FuncDecl) (string, bool) {
 
 	for _, param := range fn.Type.Params.List {
 		if isContextType(param.Type) {
-			// 返回第一个参数名
 			if len(param.Names) > 0 {
 				return param.Names[0].Name, true
 			}
@@ -124,7 +125,7 @@ func findCtxParam(fn *ast.FuncDecl) (string, bool) {
 	return "", false
 }
 
-// isContextType 检查 AST 类型表达式是否为 context.Context 或 fiber.Ctx。
+// isContextType 检查 AST 类型表达式是否是 context.Context 或 *fiber.Ctx。
 func isContextType(expr ast.Expr) bool {
 	// 检查 context.Context
 	if sel, ok := expr.(*ast.SelectorExpr); ok {
@@ -147,7 +148,7 @@ func isContextType(expr ast.Expr) bool {
 	return false
 }
 
-// findLocalCtxVar 在函数体中搜索在目标行之前赋值的 context.Context 类型的局部变量。
+// findLocalCtxVar 搜索函数体中在目标行之前赋值的 ctx 变量。
 func findLocalCtxVar(fn *ast.FuncDecl, fset *token.FileSet, targetLine int) string {
 	if fn == nil || fn.Body == nil {
 		return ""
@@ -163,11 +164,10 @@ func findLocalCtxVar(fn *ast.FuncDecl, fset *token.FileSet, targetLine int) stri
 
 		line := fset.Position(assign.Pos()).Line
 		if line >= targetLine {
-			return false // 不要在目标行之后继续查找
+			return false
 		}
 
-		// 检查：ctx := something.Context() 或 ctx := context.Background()
-		// 或：ctx, cancel := context.WithCancel(parent)
+		// 检查 ctx 赋值模式
 		for i, rhs := range assign.Rhs {
 			if isCtxCreationExpr(rhs) || isContextWithExpr(rhs) {
 				if i < len(assign.Lhs) {
@@ -187,7 +187,7 @@ func findLocalCtxVar(fn *ast.FuncDecl, fset *token.FileSet, targetLine int) stri
 	return ctxVar
 }
 
-// isCtxCreationExpr 检查表达式是否创建了 context（context.Background()、context.TODO() 等）。
+// isCtxCreationExpr 检查表达式是否创建 context（context.Background()、context.TODO()）。
 func isCtxCreationExpr(expr ast.Expr) bool {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -208,7 +208,7 @@ func isCtxCreationExpr(expr ast.Expr) bool {
 	return name == "Background" || name == "TODO"
 }
 
-// isContextWithExpr 检查表达式是否为 context.With*（WithCancel、WithTimeout 等）。
+// isContextWithExpr 检查表达式是否是 context.With*（WithCancel、WithTimeout 等）。
 func isContextWithExpr(expr ast.Expr) bool {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -225,7 +225,7 @@ func isContextWithExpr(expr ast.Expr) bool {
 	return ident.Name == "context" && strings.HasPrefix(sel.Sel.Name, "With")
 }
 
-// detectLogLib 根据函数名判断日志库。
+// detectLogLib 从函数名检测日志库类型。
 func detectLogLib(funcName string) string {
 	if strings.HasPrefix(funcName, "slog.") {
 		return "slog"
@@ -233,7 +233,12 @@ func detectLogLib(funcName string) string {
 	if strings.HasPrefix(funcName, "log.") {
 		return "fiber"
 	}
-	// logrus 函数名没有前缀
+	if strings.HasPrefix(funcName, "gorm.") {
+		return "gorm"
+	}
+	if strings.HasPrefix(funcName, "ycLogger.") || strings.HasPrefix(funcName, "logger.") {
+		return "go-logger"
+	}
 	return "logrus"
 }
 
@@ -244,6 +249,10 @@ func determineFixType(logLib string) string {
 		return "context_param" // slog.Info → slog.InfoContext
 	case "fiber":
 		return "logger_receiver" // log.Info → log.WithContext(c).Info
+	case "go-logger":
+		return "logger_receiver" // ycLogger.Info → ycLogger.WithContext(ctx).Info
+	case "gorm":
+		return "logger_receiver" // db.First → db.WithContext(ctx).First
 	case "logrus":
 		return "logger_receiver" // entry.Info → entry.WithContext(ctx).Info
 	default:

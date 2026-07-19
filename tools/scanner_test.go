@@ -8,28 +8,27 @@ import (
 )
 
 func TestScanRepositories(t *testing.T) {
-	// 创建包含假仓库的临时目录
 	tmpDir := t.TempDir()
 
-	// 创建一个类似仓库的目录
+	// 创建一个有 .git 的仓库目录
 	repoDir := filepath.Join(tmpDir, "my-repo")
 	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
 
-	// 创建一个非仓库目录
+	// 创建一个没有 .git 的目录
 	nonRepoDir := filepath.Join(tmpDir, "not-a-repo")
 	os.MkdirAll(nonRepoDir, 0755)
 
 	repos, err := ScanRepositories(context.Background(), tmpDir, 50)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
 	if len(repos) != 1 {
-		t.Fatalf("expected 1 repo, got %d", len(repos))
+		t.Fatalf("期望 1 个仓库，得到 %d", len(repos))
 	}
 
 	if repos[0] != repoDir {
-		t.Errorf("expected %s, got %s", repoDir, repos[0])
+		t.Errorf("期望 %s，得到 %s", repoDir, repos[0])
 	}
 }
 
@@ -42,113 +41,102 @@ func TestScanRepositories_MaxRepos(t *testing.T) {
 
 	repos, err := ScanRepositories(context.Background(), tmpDir, 2)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
 	if len(repos) != 2 {
-		t.Fatalf("expected 2 repos (max), got %d", len(repos))
+		t.Fatalf("期望 2 个仓库（最大值），得到 %d", len(repos))
 	}
 }
 
-func TestFindLogsWithoutContext_Slog(t *testing.T) {
+func TestFindLogsWithoutContext_GoLogger(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// 包含缺少上下文的 slog 调用的文件
+	// 使用 go-logger 包的日志调用，缺少 WithContext
 	content := `package main
 
-import "log/slog"
+import ycLogger "gitlab.yc345.tv/backend/go-logger/logger"
 
 func doWork() {
-	slog.Info("starting work")
-	slog.Error("something failed", "err", "test")
+	ycLogger.Info("starting work")
+	ycLogger.Error("something failed", "err", "test")
 }
 
 func doWorkWithContext(ctx context.Context) {
-	slog.InfoContext(ctx, "this is fine")
-	slog.Info("but this is not", "key", "val")
+	ycLogger.WithContext(ctx).Info("this is fine")
+	ycLogger.Infof("but this is not: %s", "test")
 }
 `
 	writeGoFile(t, filepath.Join(tmpDir, "main.go"), content)
 
 	logFuncs := []LogFunc{
-		{Library: "slog", Functions: []string{"Info", "Debug", "Warn", "Error"}, CtxForm: "Context"},
+		{Library: "go-logger", Functions: []string{"Info", "Error", "Infof"}, CtxForm: "WithContext"},
 	}
 
 	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
-	// 应该找到 3 个问题：slog.Info（第 6 行）、slog.Error（第 7 行）、slog.Info（第 12 行）
+	// 应该发现 3 个问题：ycLogger.Info (行6), ycLogger.Error (行7), ycLogger.Infof (行12)
 	if len(results) != 3 {
-		t.Fatalf("expected 3 log issues, got %d", len(results))
+		t.Fatalf("期望 3 个日志问题，得到 %d", len(results))
 		for i, r := range results {
 			t.Logf("  [%d] %s:%d %s", i, r.File, r.Line, r.FuncName)
 		}
 	}
 
-	// 验证合规的调用未被标记
+	// 验证合规的调用不会被标记
 	for _, r := range results {
-		if r.FuncName == "slog.InfoContext" {
-			t.Errorf("should not flag slog.InfoContext at line %d", r.Line)
+		if r.FuncName == "ycLogger.WithContext" {
+			t.Errorf("不应标记 ycLogger.WithContext 在行 %d", r.Line)
 		}
 	}
 }
 
-func TestFindLogsWithoutContext_Fiber(t *testing.T) {
+func TestFindLogsWithoutContext_Gorm(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	content := `package main
+	content := `package data
 
-import "github.com/gofiber/fiber/v2/log"
+import "gorm.io/gorm"
 
-func handler() {
-	log.Info("request received")
-	log.Error("something bad")
+type User struct {
+	ID int64
+}
+
+type Data struct {
+	db *gorm.DB
+}
+
+func (d *Data) GetUser(id int64) error {
+	var u User
+	return d.db.First(&u, id).Error
+}
+
+func (d *Data) GetUserOK(ctx context.Context, id int64) error {
+	var u User
+	return d.db.WithContext(ctx).First(&u, id).Error
 }
 `
-	writeGoFile(t, filepath.Join(tmpDir, "handler.go"), content)
+	writeGoFile(t, filepath.Join(tmpDir, "data.go"), content)
 
 	logFuncs := []LogFunc{
-		{Library: "fiber", Functions: []string{"Info", "Debug", "Warn", "Error", "Fatal", "Panic"}, CtxForm: "WithContext"},
+		{Library: "gorm", Functions: []string{"First", "Find", "Create", "Update", "Delete"}, CtxForm: "WithContext"},
 	}
 
 	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("expected 2 fiber log issues, got %d", len(results))
-	}
-}
-
-func TestFindLogsWithoutContext_Logrus(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	content := `package main
-
-import "github.com/sirupsen/logrus"
-
-func process(entry *logrus.Entry) {
-	entry.Info("processing started")
-	entry.WithContext(ctx).Info("this is fine")
-}
-`
-	writeGoFile(t, filepath.Join(tmpDir, "process.go"), content)
-
-	logFuncs := []LogFunc{
-		{Library: "logrus", Functions: []string{"Info", "Debug", "Warn", "Error"}, CtxForm: "WithContext"},
-	}
-
-	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// 应该找到 1 个问题：entry.Info（而非 entry.WithContext(ctx).Info）
+	// 应该发现 1 个问题：d.db.First() (行18)
+	// d.db.WithContext(ctx).First() (行23) 是合规的
 	if len(results) != 1 {
-		t.Fatalf("expected 1 logrus log issue, got %d", len(results))
+		t.Fatalf("期望 1 个 gorm 问题，得到 %d", len(results))
+		for i, r := range results {
+			t.Logf("  [%d] %s:%d %s", i, r.File, r.Line, r.FuncName)
+		}
 	}
 }
 
@@ -157,25 +145,25 @@ func TestFindLogsWithoutContext_SkipsTestFiles(t *testing.T) {
 
 	content := `package main
 
-import "log/slog"
+import ycLogger "gitlab.yc345.tv/backend/go-logger/logger"
 
 func TestSomething(t *testing.T) {
-	slog.Info("this is in a test file")
+	ycLogger.Info("this is in a test file")
 }
 `
 	writeGoFile(t, filepath.Join(tmpDir, "main_test.go"), content)
 
 	logFuncs := []LogFunc{
-		{Library: "slog", Functions: []string{"Info"}, CtxForm: "Context"},
+		{Library: "go-logger", Functions: []string{"Info"}, CtxForm: "WithContext"},
 	}
 
 	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
 	if len(results) != 0 {
-		t.Fatalf("expected 0 issues (test files skipped), got %d", len(results))
+		t.Fatalf("期望 0 个问题（跳过测试文件），得到 %d", len(results))
 	}
 }
 
@@ -187,31 +175,66 @@ func TestFindLogsWithoutContext_SkipsVendor(t *testing.T) {
 
 	content := `package pkg
 
-import "log/slog"
+import ycLogger "gitlab.yc345.tv/backend/go-logger/logger"
 
 func Do() {
-	slog.Info("in vendor")
+	ycLogger.Info("in vendor")
 }
 `
 	writeGoFile(t, filepath.Join(vendorDir, "lib.go"), content)
 
 	logFuncs := []LogFunc{
-		{Library: "slog", Functions: []string{"Info"}, CtxForm: "Context"},
+		{Library: "go-logger", Functions: []string{"Info"}, CtxForm: "WithContext"},
 	}
 
 	results, err := FindLogsWithoutContext(context.Background(), tmpDir, logFuncs)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 
 	if len(results) != 0 {
-		t.Fatalf("expected 0 issues (vendor skipped), got %d", len(results))
+		t.Fatalf("期望 0 个问题（跳过 vendor），得到 %d", len(results))
+	}
+}
+
+func TestPathValidator(t *testing.T) {
+	tmpDir := t.TempDir()
+	validator := NewPathValidator(tmpDir)
+
+	// 允许的路径
+	validPath := filepath.Join(tmpDir, "repo", "main.go")
+	if err := validator.ValidatePath(validPath); err != nil {
+		t.Errorf("期望路径 %s 有效，得到错误: %v", validPath, err)
+	}
+
+	// 禁止的路径 - .git
+	gitPath := filepath.Join(tmpDir, "repo", ".git", "config")
+	if err := validator.ValidatePath(gitPath); err == nil {
+		t.Errorf("期望路径 %s 被禁止，但通过了校验", gitPath)
+	}
+
+	// 禁止的路径 - go.mod
+	modPath := filepath.Join(tmpDir, "repo", "go.mod")
+	if err := validator.ValidatePath(modPath); err == nil {
+		t.Errorf("期望路径 %s 被禁止，但通过了校验", modPath)
+	}
+
+	// 禁止的路径 - 测试文件
+	testPath := filepath.Join(tmpDir, "repo", "main_test.go")
+	if err := validator.ValidatePath(testPath); err == nil {
+		t.Errorf("期望路径 %s 被禁止，但通过了校验", testPath)
+	}
+
+	// 超出范围的路径
+	outsidePath := "/tmp/outside/main.go"
+	if err := validator.ValidatePath(outsidePath); err == nil {
+		t.Errorf("期望路径 %s 被禁止，但通过了校验", outsidePath)
 	}
 }
 
 func writeGoFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatalf("write file %s: %v", path, err)
+		t.Fatalf("写入文件 %s 失败: %v", path, err)
 	}
 }
