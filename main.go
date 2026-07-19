@@ -33,25 +33,26 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// 创建 ReAct Agent
-	loopAgent, err := agent.NewLoopAgent(ctx, cfg)
+	// 创建多 Agent 编排系统
+	loop, err := agent.NewMultiAgentLoop(ctx, cfg)
 	if err != nil {
-		log.Fatalf("创建 Agent 失败: %v", err)
+		log.Fatalf("创建多 Agent 系统失败: %v", err)
 	}
 
 	// 构建任务描述
 	task := agent.BuildTask(cfg)
-	log.Printf("[Agent] 开始执行任务")
-	log.Printf("[Agent] 目标仓库目录: %s", cfg.RepoRoot)
-	log.Printf("[Agent] LLM 模型: %s", cfg.LLMModel)
+	log.Printf("[MultiAgent] 开始执行任务")
+	log.Printf("[MultiAgent] 目标仓库目录: %s", cfg.RepoRoot)
+	log.Printf("[MultiAgent] LLM 模型: %s", cfg.LLMModel)
+	log.Printf("[MultiAgent] SubAgent: scanner, analyzer, fixer, verifier, reporter")
 
-	// 运行 Agent（Agent 会自主决策调用工具）
-	report, err := loopAgent.Run(ctx, task)
+	// 运行多 Agent 任务
+	report, err := loop.Run(ctx, task)
 	if err != nil {
-		log.Fatalf("Agent 执行失败: %v", err)
+		log.Fatalf("多 Agent 执行失败: %v", err)
 	}
 
 	// 输出最终报告
 	fmt.Fprintln(os.Stdout, "\n"+report)
-	log.Println("[Agent] 任务执行完成")
+	log.Println("[MultiAgent] 任务执行完成")
 }

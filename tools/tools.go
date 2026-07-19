@@ -404,3 +404,60 @@ func toJSON(v interface{}) string {
 	data, _ := json.Marshal(v)
 	return string(data)
 }
+
+// ========== 供 SubAgent 使用的导出注册函数 ==========
+
+// RegisterScanTool 注册扫描仓库工具
+func RegisterScanTool(cfg *config.Config) tool.InvokableTool {
+	return newScanTool(cfg)
+}
+
+// RegisterPullTool 注册拉取代码工具
+func RegisterPullTool(cfg *config.Config) tool.InvokableTool {
+	return newPullTool(cfg)
+}
+
+// RegisterFindIssuesTool 注册检测日志问题工具
+func RegisterFindIssuesTool(cfg *config.Config) tool.InvokableTool {
+	return newFindIssuesTool(convertToLogFunc(cfg.LogFunctions))
+}
+
+// RegisterAnalyzeTool 注册分析调用点工具
+func RegisterAnalyzeTool() tool.InvokableTool {
+	return newAnalyzeTool()
+}
+
+// RegisterFixTool 注册修复工具
+func RegisterFixTool(cfg *config.Config) tool.InvokableTool {
+	return newFixTool(cfg)
+}
+
+// RegisterCompileVerifyTool 注册编译验证工具
+func RegisterCompileVerifyTool() tool.InvokableTool {
+	return newCompileVerifyTool()
+}
+
+// RegisterRescanVerifyTool 注册重扫描验证工具
+func RegisterRescanVerifyTool(cfg *config.Config) tool.InvokableTool {
+	return newRescanVerifyTool(convertToLogFunc(cfg.LogFunctions))
+}
+
+// RegisterRegressionVerifyTool 注册回归验证工具
+func RegisterRegressionVerifyTool() tool.InvokableTool {
+	return newRegressionVerifyTool()
+}
+
+// RegisterCommitTool 注册提交工具
+func RegisterCommitTool(cfg *config.Config) tool.InvokableTool {
+	return newCommitTool(cfg)
+}
+
+// RegisterReportTool 注册报告生成工具
+func RegisterReportTool() tool.InvokableTool {
+	return newReportTool()
+}
+
+// RegisterFeishuTool 注册飞书通知工具
+func RegisterFeishuTool(cfg *config.Config) tool.InvokableTool {
+	return newFeishuTool(cfg)
+}
