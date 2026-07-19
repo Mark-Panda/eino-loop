@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -94,6 +95,35 @@ func Load() *Config {
 func (c *Config) FixBranchName() string {
 	date := time.Now().Format("20060102")
 	return strings.ReplaceAll(c.FixBranchTpl, "{date}", date)
+}
+
+// Validate 校验配置的完整性和合理性。
+func (c *Config) Validate() error {
+	if c.RepoRoot == "" {
+		return fmt.Errorf("EINO_LOOP_REPO_ROOT 不能为空")
+	}
+	if _, err := os.Stat(c.RepoRoot); os.IsNotExist(err) {
+		return fmt.Errorf("EINO_LOOP_REPO_ROOT 路径不存在: %s", c.RepoRoot)
+	}
+	if c.MaxRepos <= 0 {
+		return fmt.Errorf("EINO_LOOP_MAX_REPOS 必须为正数，当前值: %d", c.MaxRepos)
+	}
+	if c.MaxRetries <= 0 {
+		return fmt.Errorf("EINO_LOOP_MAX_RETRIES 必须为正数，当前值: %d", c.MaxRetries)
+	}
+	if c.ScanInterval <= 0 {
+		return fmt.Errorf("EINO_LOOP_SCAN_INTERVAL 必须为正数")
+	}
+	if c.LLMAPIKey == "" {
+		return fmt.Errorf("EINO_LOOP_LLM_API_KEY 不能为空")
+	}
+	if c.LLMModel == "" {
+		return fmt.Errorf("EINO_LOOP_LLM_MODEL 不能为空")
+	}
+	if c.LLMMaxStep <= 0 {
+		c.LLMMaxStep = 20 // 默认值
+	}
+	return nil
 }
 
 func envOrDefault(key, fallback string) string {

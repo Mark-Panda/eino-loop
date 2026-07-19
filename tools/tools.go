@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 
 	"github.com/cloudwego/eino/components/tool"
 
@@ -91,22 +93,20 @@ type FeishuInput struct {
 	Title      string `json:"title" description:"文档标题"`
 }
 
-// RegisterAll 注册所有 eino Tool 并返回工具列表
+// RegisterAll 注册所有 eino Tool 并返回工具列表（供统一入口使用）
 func RegisterAll(cfg *config.Config) []tool.BaseTool {
-	logFuncs := convertToLogFunc(cfg.LogFunctions)
-
 	return []tool.BaseTool{
-		newScanTool(cfg),
-		newPullTool(cfg),
-		newFindIssuesTool(logFuncs),
-		newAnalyzeTool(),
-		newFixTool(cfg),
-		newCompileVerifyTool(),
-		newRescanVerifyTool(logFuncs),
-		newRegressionVerifyTool(),
-		newCommitTool(cfg),
-		newReportTool(),
-		newFeishuTool(cfg),
+		RegisterScanTool(cfg),
+		RegisterPullTool(cfg),
+		RegisterFindIssuesTool(cfg),
+		RegisterAnalyzeTool(),
+		RegisterFixTool(cfg),
+		RegisterCompileVerifyTool(),
+		RegisterRescanVerifyTool(cfg),
+		RegisterRegressionVerifyTool(),
+		RegisterCommitTool(cfg),
+		RegisterReportTool(),
+		RegisterFeishuTool(cfg),
 	}
 }
 
@@ -340,8 +340,19 @@ func newFeishuTool(cfg *config.Config) tool.InvokableTool {
 			if !cfg.FeishuEnabled {
 				return toJSON(map[string]interface{}{"sent": false, "reason": "飞书通知未启用"}), nil
 			}
-			// 飞书发送逻辑
-			return toJSON(map[string]interface{}{"sent": true, "title": input.Title}), nil
+			if cfg.FeishuChatID == "" {
+				return toJSON(map[string]interface{}{"sent": false, "reason": "未配置飞书群聊 ID"}), nil
+			}
+			// 检查 lark-cli 是否可用
+			if !isLarkCLIAvailable(cfg.FeishuCLIPath) {
+				return toJSON(map[string]interface{}{"sent": false, "reason": "lark-cli 不可用，请安装或配置路径"}), nil
+			}
+			// 发送飞书消息
+			err := sendFeishuMessage(ctx, cfg, input.Title, input.DocContent)
+			if err != nil {
+				return toJSON(map[string]interface{}{"sent": false, "error": err.Error()}), nil
+			}
+			return toJSON(map[string]interface{}{"sent": true, "title": input.Title, "chat_id": cfg.FeishuChatID}), nil
 		},
 	)
 }
@@ -465,4 +476,49 @@ func RegisterReportTool() tool.InvokableTool {
 // RegisterFeishuTool 注册飞书通知工具
 func RegisterFeishuTool(cfg *config.Config) tool.InvokableTool {
 	return newFeishuTool(cfg)
+}
+
+// ========== 飞书辅助函数 ==========
+
+// isLarkCLIAvailable 检查 lark-cli 是否可用
+func isLarkCLIAvailable(cliPath string) bool {
+	_, err := exec.LookPath(cliPath)
+	return err == nil
+}
+
+// sendFeishuMessage 通过 lark-cli 发送飞书消息
+func sendFeishuMessage(ctx context.Context, cfg *config.Config, title, content string) error {
+	// 写入临时文件
+	tmpFile, err := os.CreateTemp("", "eino-loop-feishu-*.md")
+	if err != nil {
+		return fmt.Errorf("创建临时文件失败: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(content); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("写入临时文件失败: %w", err)
+	}
+	tmpFile.Close()
+
+	// 调用 lark-cli 发送消息
+	cmd := exec.CommandContext(ctx, cfg.FeishuCLIPath, "message", "send",
+		"--chat-id", cfg.FeishuChatID,
+		"--type", "text",
+		"--content", fmt.Sprintf("🔧 %s\n\n%s", title, truncateString(content, 2000)),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("lark-cli 发送失败: %w: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// truncateString 截断字符串
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
